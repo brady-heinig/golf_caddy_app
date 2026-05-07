@@ -9,9 +9,6 @@ export default function HomePage() {
       </p>
       <ul>
         <li>
-          <Link href="/login">Login</Link>
-        </li>
-        <li>
           <Link href="/settings">Settings (handicap + bag)</Link>
         </li>
         <li>

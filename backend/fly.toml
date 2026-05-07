@@ -13,9 +13,6 @@ primary_region = "dfw"
   processes = ["app"]
 
 [env]
-  SECURE_COOKIES = "1"
-  # Required when the UI is on a different site than this API (e.g. Vercel + Fly).
-  SESSION_COOKIE_SAMESITE = "none"
   # Production: set your real Vercel origin (overrides this), e.g.
   #   fly secrets set CORS_ALLOW_ORIGINS="https://your-app.vercel.app"
   CORS_ALLOW_ORIGINS = "http://localhost:3000"

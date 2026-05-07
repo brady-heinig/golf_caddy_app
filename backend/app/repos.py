@@ -36,6 +36,24 @@ def create_user(
     return int(row["id"])
 
 
+def ensure_default_user(conn: psycopg.Connection) -> int:
+    """Ensure a default single user exists; return its id.
+
+    With auth removed, the app uses one shared user for settings/rounds/chat.
+    """
+    row = conn.execute("SELECT id FROM users ORDER BY id ASC LIMIT 1").fetchone()
+    if row:
+        return int(row["id"])
+    cur = conn.execute(
+        "INSERT INTO users (username, password_hash, is_admin) VALUES (%s, %s, %s) RETURNING id",
+        ("default", "disabled", True),
+    )
+    conn.commit()
+    created = cur.fetchone()
+    assert created is not None
+    return int(created["id"])
+
+
 def update_user_password(conn: psycopg.Connection, user_id: int, password_hash: str) -> None:
     conn.execute("UPDATE users SET password_hash = %s WHERE id = %s", (password_hash, user_id))
     conn.commit()

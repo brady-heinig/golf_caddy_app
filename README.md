@@ -16,9 +16,6 @@ export DATABASE_URL="postgresql://USER:PASSWORD@HOST:5432/postgres"
 # required for chat
 export ANTHROPIC_API_KEY="..."
 
-# dev cookies over http://localhost
-export SECURE_COOKIES=0
-export SESSION_COOKIE_SAMESITE=lax
 export CORS_ALLOW_ORIGINS="http://localhost:3000"
 
 uvicorn app.main:app --reload --port 8000
@@ -54,10 +51,6 @@ DATABASE_URL="postgresql://..."
 # required for chat
 ANTHROPIC_API_KEY="..."
 
-# required for Vercel -> API cookie auth (cross-site)
-SECURE_COOKIES=1
-SESSION_COOKIE_SAMESITE=none
-
 # required: your real Vercel URL(s), comma-separated
 CORS_ALLOW_ORIGINS="https://YOUR-VERCEL-DOMAIN"
 ```
@@ -70,20 +63,5 @@ CORS_ALLOW_ORIGINS="https://YOUR-VERCEL-DOMAIN"
 
 ## First admin user
 
-Create an admin via the API (once backend is running):
-
-Bootstrap the first admin directly in the backend environment:
-
-```bash
-python -c "
-from app.config import load_settings
-from app.db import connect
-from app.repos import create_user
-from app.security import hash_password
-settings = load_settings()
-conn = connect(settings.database_url)
-create_user(conn, 'admin', hash_password('CHANGE-ME-strong-password'), is_admin=True)
-print('bootstrap ok')
-"
-```
+Authentication has been removed; the app runs as a single user.
 

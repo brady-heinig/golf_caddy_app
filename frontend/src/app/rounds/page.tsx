@@ -30,7 +30,7 @@ export default function RoundsPage() {
       setActive(a);
       setFinished(f);
     } catch (e: any) {
-      setError(e?.message || "Failed to load rounds (are you logged in?)");
+      setError(e?.message || "Failed to load rounds");
     } finally {
       setLoading(false);
     }

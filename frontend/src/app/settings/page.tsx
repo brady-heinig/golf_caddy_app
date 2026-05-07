@@ -42,7 +42,7 @@ export default function SettingsPage() {
           setBag(merged);
         }
       } catch (e: any) {
-        setError(e?.message || "Failed to load settings (are you logged in?)");
+        setError(e?.message || "Failed to load settings");
       } finally {
         setLoading(false);
       }
