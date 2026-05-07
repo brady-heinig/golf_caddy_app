@@ -258,6 +258,8 @@ export function CaddieApp() {
     return [{ id, name: "You", scores: emptyScores18() }];
   });
   const [showHolePicker, setShowHolePicker] = useState<boolean>(false);
+  const [scoreEditCell, setScoreEditCell] = useState<{ playerId: string; hole: number } | null>(null);
+  const [activeCardPlayerId, setActiveCardPlayerId] = useState<string | null>(null);
 
   const mapRef = useRef<Map | null>(null);
   const mapEl = useRef<HTMLDivElement | null>(null);
@@ -445,6 +447,32 @@ export function CaddieApp() {
       }),
     );
   };
+
+  const resolvedActivePlayerId = activeCardPlayerId ?? scorecardPlayers[0]?.id ?? "";
+
+  const activateHoleCell = (playerId: string, hn: number) => {
+    setActiveCardPlayerId(playerId);
+    setScoreEditCell({ playerId, hole: hn });
+    setScorecardPlayers((prev) =>
+      prev.map((pl) => {
+        if (pl.id !== playerId) return pl;
+        if (pl.scores[hn - 1] != null) return pl;
+        const p = parForHole(hn);
+        const scores = pl.scores.slice();
+        scores[hn - 1] = p;
+        return { ...pl, scores };
+      }),
+    );
+  };
+
+  const addScorecardPlayer = () => {
+    const id = genPlayerId();
+    setScorecardPlayers((prev) => [...prev, { id, name: `Player ${prev.length + 1}`, scores: emptyScores18() }]);
+  };
+
+  useEffect(() => {
+    if (!showScore) setScoreEditCell(null);
+  }, [showScore]);
 
   const talkWithCaddie = () => {
     // Hosted app uses round-based chat (Supabase-backed).
@@ -1153,63 +1181,134 @@ export function CaddieApp() {
               </button>
             </div>
 
-            <div style={{ padding: 12, overflow: "auto" }}>
-              {scorecardPlayers.map((pl) => {
-                const cur = pl.scores[holeNum - 1];
-                const display = typeof cur === "number" ? cur : parForHole(holeNum);
-                return (
-                  <div key={pl.id} style={{ display: "grid", gap: 10 }}>
-                    <div style={{ fontWeight: 900 }}>{pl.name}</div>
-                    <div className="scoreAdjuster">
-                      <button
-                        type="button"
-                        className="scoreAdjBtn"
-                        aria-label="Subtract one stroke"
-                        disabled={display <= SCORE_STRIP_MIN}
-                        onClick={() => adjustHoleScore(pl.id, holeNum, -1)}
-                      >
-                        −
-                      </button>
-                      <div className="scoreAdjVal" aria-live="polite">
-                        {display}
-                      </div>
-                      <button
-                        type="button"
-                        className="scoreAdjBtn"
-                        aria-label="Add one stroke"
-                        disabled={display >= SCORE_STRIP_MAX}
-                        onClick={() => adjustHoleScore(pl.id, holeNum, 1)}
-                      >
-                        +
-                      </button>
-                    </div>
-                    <div style={{ display: "flex", gap: 10 }}>
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => setHoleScore(pl.id, holeNum, parForHole(holeNum))}
-                      >
-                        Set par
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => setHoleScore(pl.id, holeNum, SCORE_STRIP_MIN)}
-                      >
-                        Min
-                      </button>
-                      <button
-                        type="button"
-                        className="btn"
-                        onClick={() => setHoleScore(pl.id, holeNum, SCORE_STRIP_MAX)}
-                      >
-                        Max
-                      </button>
-                    </div>
+            <div className="scorecardBody">
+              <div className="scorecardSplit">
+                <div className="scorecardPinnedCol">
+                  <div className="scorecardPinnedMeta">
+                    <div className="scorecardMetaLabel">Hole</div>
+                    <div className="scorecardMetaLabel">Handicap</div>
+                    <div className="scorecardMetaLabel">Par</div>
                   </div>
-                );
-              })}
-              <div className="muted" style={{ fontSize: 12, marginTop: 14 }}>
+                  {scorecardPlayers.map((pl) => {
+                    const rowActive = pl.id === resolvedActivePlayerId;
+                    return (
+                      <div
+                        key={`pin-${pl.id}`}
+                        className={`scorecardPinnedName scorecardNameCell ${rowActive ? "scorecardPinnedNameActive" : ""}`}
+                      >
+                        <input
+                          className="scorecardNameInput"
+                          value={pl.name}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setScorecardPlayers((prev) => prev.map((x) => (x.id === pl.id ? { ...x, name: v } : x)));
+                          }}
+                          placeholder="Name"
+                          aria-label="Player name"
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="scorecardHScroll">
+                  <div className="scorecardScrollWide">
+                    <div className="scorecardScrollHeader">
+                      {Array.from({ length: 18 }, (_, i) => (
+                        <div key={`hdr-hole-${i + 1}`} className="scorecardHdrData scorecardHdrRowHole">
+                          {i + 1}
+                        </div>
+                      ))}
+                      {Array.from({ length: 18 }, (_, i) => {
+                        const hn = i + 1;
+                        const h = (course?.holes ?? [])[hn - 1]?.handicap ?? "";
+                        return (
+                          <div key={`hdr-hcp-${hn}`} className="scorecardHdrData scorecardHdrRowHcp">
+                            {h}
+                          </div>
+                        );
+                      })}
+                      {Array.from({ length: 18 }, (_, i) => {
+                        const hn = i + 1;
+                        const p = (course?.holes ?? [])[hn - 1]?.par ?? "";
+                        return (
+                          <div key={`hdr-par-${hn}`} className="scorecardHdrData scorecardHdrRowPar">
+                            {p}
+                          </div>
+                        );
+                      })}
+                    </div>
+
+                    {scorecardPlayers.map((pl) => (
+                      <div key={pl.id} className="scorecardGridRow scorecardPlayerRow">
+                        {Array.from({ length: 18 }, (_, i) => {
+                          const hn = i + 1;
+                          const s = pl.scores[hn - 1];
+                          const isEditing =
+                            scoreEditCell != null && scoreEditCell.playerId === pl.id && scoreEditCell.hole === hn;
+                          const showAdjuster = isEditing && typeof s === "number";
+                          return (
+                            <div
+                              key={hn}
+                              data-score-cell
+                              tabIndex={0}
+                              className={`scoreCell scoreCellInGrid ${isEditing ? "active" : ""}`}
+                              onClick={() => activateHoleCell(pl.id, hn)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                  e.preventDefault();
+                                  activateHoleCell(pl.id, hn);
+                                }
+                              }}
+                              aria-label={
+                                typeof s === "number"
+                                  ? `Hole ${hn}, score ${s}. Press Enter to edit.`
+                                  : `Hole ${hn}, no score. Press Enter to add.`
+                              }
+                            >
+                              {!showAdjuster ? (
+                                <div className="scoreVal scoreValSolo">{typeof s === "number" ? s : ""}</div>
+                              ) : (
+                                <div
+                                  className="scoreAdjuster"
+                                  onClick={(e) => e.stopPropagation()}
+                                  onPointerDown={(e) => e.stopPropagation()}
+                                >
+                                  <button
+                                    type="button"
+                                    className="scoreAdjBtn"
+                                    aria-label="Subtract one stroke"
+                                    disabled={typeof s === "number" && s <= SCORE_STRIP_MIN}
+                                    onClick={() => adjustHoleScore(pl.id, hn, -1)}
+                                  >
+                                    −
+                                  </button>
+                                  <div className="scoreAdjVal" aria-live="polite">
+                                    {s}
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="scoreAdjBtn"
+                                    aria-label="Add one stroke"
+                                    disabled={typeof s === "number" && s >= SCORE_STRIP_MAX}
+                                    onClick={() => adjustHoleScore(pl.id, hn, 1)}
+                                  >
+                                    +
+                                  </button>
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+              <button type="button" className="btn scorecardAddPl" onClick={addScorecardPlayer}>
+                + Add player
+              </button>
+              <div className="muted" style={{ fontSize: 12 }}>
                 Score is stored locally in your browser for this prototype screen.
               </div>
             </div>

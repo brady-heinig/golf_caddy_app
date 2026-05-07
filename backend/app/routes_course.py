@@ -26,8 +26,8 @@ def list_courses() -> list[dict[str, Any]]:
     return out
 
 
-@router.get("/{course_id}/hole/{hole_number}")
-def get_hole(course_id: str, hole_number: int) -> dict[str, Any]:
+@router.get("/{course_id}/hole/{hole_number}/basic")
+def get_hole_basic(course_id: str, hole_number: int) -> dict[str, Any]:
     course = course_data.COURSES.get(course_id)
     if not course:
         raise HTTPException(status_code=404, detail="Unknown course_id")

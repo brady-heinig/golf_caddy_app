@@ -100,7 +100,10 @@ def get_hole(
         raise HTTPException(status_code=404, detail="Unknown hole_number")
 
     hole = holes[hole_number - 1]
-    features = course_features.load_hole_feature_collection(course_id, hole_number)
+    try:
+        features = course_features.load_hole_feature_collection(course_id, hole_number)
+    except Exception:
+        features = {"type": "FeatureCollection", "features": []}
     w = weather.get_weather(float(course["center_lat"]), float(course["center_lon"]))
 
     gc = hole["green_center"]
