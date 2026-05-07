@@ -41,6 +41,31 @@ function emptyScores18(): (number | null)[] {
   return Array.from({ length: 18 }, () => null);
 }
 
+function bearingDegrees(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const phi1 = (lat1 * Math.PI) / 180;
+  const phi2 = (lat2 * Math.PI) / 180;
+  const dlam = ((lon2 - lon1) * Math.PI) / 180;
+  const x = Math.sin(dlam) * Math.cos(phi2);
+  const y = Math.cos(phi1) * Math.sin(phi2) - Math.sin(phi1) * Math.cos(phi2) * Math.cos(dlam);
+  const brg = (Math.atan2(x, y) * 180) / Math.PI;
+  return ((brg % 360) + 360) % 360;
+}
+
+function windShotAlongCross(windMph: number, windFromDeg: number, bearingShotDeg: number): { along: number; cross: number } {
+  const windTo = (Number(windFromDeg) + 180) % 360;
+  const rad = ((windTo - Number(bearingShotDeg)) * Math.PI) / 180;
+  const w = Number(windMph);
+  return { along: w * Math.cos(rad), cross: w * Math.sin(rad) };
+}
+
+function windYardHeadTailYds(alongMph: number, baselineYds: number): { add: number; sub: number } {
+  const b = Number(baselineYds);
+  if (!(b > 0)) return { add: 0, sub: 0 };
+  const headMph = Math.max(0, -Number(alongMph));
+  const tailMph = Math.max(0, Number(alongMph));
+  return { add: b * 0.01 * headMph, sub: b * 0.005 * tailMph };
+}
+
 function haversineYards(a: LL, b: LL): number {
   const R = 6371008.8; // meters
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -260,6 +285,8 @@ export function CaddieApp() {
   const [showHolePicker, setShowHolePicker] = useState<boolean>(false);
   const [scoreEditCell, setScoreEditCell] = useState<{ playerId: string; hole: number } | null>(null);
   const [activeCardPlayerId, setActiveCardPlayerId] = useState<string | null>(null);
+  const [wxOverride, setWxOverride] = useState<any | null>(null);
+  const [metricsOverride, setMetricsOverride] = useState<any | null>(null);
 
   const mapRef = useRef<Map | null>(null);
   const mapEl = useRef<HTMLDivElement | null>(null);
@@ -383,16 +410,114 @@ export function CaddieApp() {
   }, [roundMode, courseId, holeNum, effectivePos?.lat, effectivePos?.lon]);
 
   const metrics = hole?.metrics;
-  const dist = metrics?.distance_yd ?? "—";
-  const plays = metrics?.plays_like_yd ?? "—";
-  const elevToPinYd = metrics?.elev_change_yd;
-  const windAdjMetric = metrics?.wind_adjust_yd;
-  const greenHitPct = metrics?.green_hit_pct;
-  const w = hole?.weather;
+  const effectiveMetrics = metricsOverride ?? metrics ?? null;
+  const dist = effectiveMetrics?.distance_yd ?? "—";
+  const plays = effectiveMetrics?.plays_like_yd ?? "—";
+  const elevToPinYd = effectiveMetrics?.elev_change_yd;
+  const windAdjMetric = effectiveMetrics?.wind_adjust_yd;
+  const greenHitPct = effectiveMetrics?.green_hit_pct;
+  const w = wxOverride ?? hole?.weather ?? null;
   const windMph = w?.wind_mph ?? null;
   const windFromDeg = w?.wind_dir_deg ?? null;
   const windCard = w?.wind_dir_card ?? "";
   const weatherOk = Boolean(w && !w.error && windMph != null && windFromDeg != null);
+
+  // Client-side fallback: if backend can't reach Open‑Meteo, compute weather + plays-like adjustments here.
+  useEffect(() => {
+    if (!hole?.hole) return;
+    const tee = hole.hole.tee as LL;
+    const gc = hole.hole.green_center as LL;
+    const player = effectivePos ?? tee;
+
+    const backendWx = hole?.weather;
+    const backendOk = Boolean(backendWx && !backendWx.error && backendWx.wind_mph != null && backendWx.wind_dir_deg != null);
+    const backendHasMetrics = Boolean(hole?.metrics && hole.metrics.distance_yd != null && hole.metrics.elev_change_yd != null);
+
+    let cancelled = false;
+    const ac = new AbortController();
+
+    async function fetchWxAndMaybeMetrics() {
+      try {
+        // Weather fallback (Open‑Meteo forecast current)
+        if (!backendOk) {
+          const q = new URLSearchParams({
+            latitude: String(player.lat),
+            longitude: String(player.lon),
+            current: "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation,weather_code",
+            wind_speed_unit: "mph",
+            temperature_unit: "fahrenheit",
+            forecast_days: "1",
+          });
+          const r = await fetch(`https://api.open-meteo.com/v1/forecast?${q.toString()}`, {
+            signal: ac.signal,
+            cache: "no-store",
+          });
+          if (!r.ok) throw new Error(`wx ${r.status}`);
+          const j = await r.json();
+          const cur = j?.current ?? {};
+          const wd = cur?.wind_direction_10m;
+          const ws = cur?.wind_speed_10m;
+          const wx = {
+            temp_f: cur?.temperature_2m ?? null,
+            humidity_pct: cur?.relative_humidity_2m ?? null,
+            wind_mph: typeof ws === "number" ? ws : ws != null ? Number(ws) : null,
+            wind_dir_deg: typeof wd === "number" ? wd : wd != null ? Number(wd) : null,
+            wind_dir_card: "",
+          };
+          if (!cancelled) setWxOverride(wx);
+        } else {
+          if (!cancelled) setWxOverride(null);
+        }
+
+        // Metrics fallback (elevation + wind adjustment) if backend metrics missing.
+        if (!backendHasMetrics) {
+          const q2 = new URLSearchParams({
+            latitude: `${player.lat},${gc.lat}`,
+            longitude: `${player.lon},${gc.lon}`,
+          });
+          const r2 = await fetch(`https://api.open-meteo.com/v1/elevation?${q2.toString()}`, {
+            signal: ac.signal,
+            cache: "no-store",
+          });
+          if (!r2.ok) throw new Error(`elev ${r2.status}`);
+          const j2 = await r2.json();
+          const arr = Array.isArray(j2?.elevation) ? j2.elevation : [];
+          const elevPlayerM = Number(arr?.[0] ?? 0);
+          const elevGreenM = Number(arr?.[1] ?? 0);
+          const elevChangeYd = ((elevGreenM - elevPlayerM) * 3.28084) / 3.0;
+          const distYd = haversineYards(player, gc);
+          const baseline = distYd + elevChangeYd;
+
+          const wx = (wxOverride ?? backendWx) as any;
+          let windAdj = 0;
+          if (wx && !wx.error && wx.wind_mph != null && wx.wind_dir_deg != null) {
+            const brg = bearingDegrees(player.lat, player.lon, gc.lat, gc.lon);
+            const { along } = windShotAlongCross(Number(wx.wind_mph), Number(wx.wind_dir_deg), brg);
+            const { add, sub } = windYardHeadTailYds(along, baseline);
+            windAdj = add - sub;
+          }
+          const playsLike = baseline + windAdj;
+          const out = {
+            distance_yd: Math.round(distYd),
+            elev_change_yd: Math.round(elevChangeYd * 10) / 10,
+            wind_adjust_yd: Math.round(windAdj * 10) / 10,
+            plays_like_yd: Math.round(playsLike),
+          };
+          if (!cancelled) setMetricsOverride(out);
+        } else {
+          if (!cancelled) setMetricsOverride(null);
+        }
+      } catch {
+        // If the browser can't fetch either, keep backend values (or lack thereof).
+      }
+    }
+
+    fetchWxAndMaybeMetrics();
+    return () => {
+      cancelled = true;
+      ac.abort();
+    };
+  }, [hole?.hole?.number, hole?.weather?.fetched_at, effectivePos?.lat, effectivePos?.lon, wxOverride]);
 
   const primaryScores = scorecardPlayers[0]?.scores ?? [];
   const scoreStr = useMemo(() => {
