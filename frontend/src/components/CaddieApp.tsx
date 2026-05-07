@@ -341,14 +341,14 @@ export function CaddieApp() {
   }, [roundMode, holeNum, hole?.hole?.number, hole?.hole?.tee?.lat, hole?.hole?.tee?.lon]);
 
   useEffect(() => {
-    fetch("/api/courses")
+    fetch("/api/caddie/courses")
       .then((r) => r.json())
       .then(setCourses)
       .catch(() => setCourses([]));
   }, []);
 
   useEffect(() => {
-    fetch(`/api/course/${encodeURIComponent(courseId)}`)
+    fetch(`/api/caddie/course/${encodeURIComponent(courseId)}`)
       .then((r) => {
         if (!r.ok) throw new Error("course fetch failed");
         return r.json();
@@ -366,7 +366,7 @@ export function CaddieApp() {
         ? `?player_lat=${encodeURIComponent(effectivePos.lat)}&player_lon=${encodeURIComponent(effectivePos.lon)}`
         : "";
     const n = holeNum;
-    fetch(`/api/course/${encodeURIComponent(courseId)}/hole/${n}${qp}`, { signal: ac.signal, cache: "no-store" })
+    fetch(`/api/caddie/course/${encodeURIComponent(courseId)}/hole/${n}${qp}`, { signal: ac.signal, cache: "no-store" })
       .then((r) => {
         if (!r.ok) throw new Error("hole fetch failed");
         return r.json();
@@ -704,7 +704,7 @@ export function CaddieApp() {
           if (!a || !b) return;
           const rid = ++pathLegsRequestIdRef.current;
           const url =
-            `/api/course/${encodeURIComponent(cid)}/hole/${hn}/plays-like-path?` +
+            `/api/caddie/course/${encodeURIComponent(cid)}/hole/${hn}/plays-like-path?` +
             `player_lat=${encodeURIComponent(a.lat)}&player_lon=${encodeURIComponent(a.lon)}` +
             `&bend_lat=${encodeURIComponent(b.lat)}&bend_lon=${encodeURIComponent(b.lon)}`;
           fetch(url, { cache: "no-store" })

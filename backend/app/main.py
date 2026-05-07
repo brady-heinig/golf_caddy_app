@@ -13,6 +13,7 @@ from .routes_rounds import router as rounds_router
 from .routes_chat import router as chat_router
 from .routes_course import router as course_router
 from .routes_caddie_compat import router as caddie_compat_router
+from .routes_caddie_api import router as caddie_api_router
 from .repos import ensure_default_user
 
 
@@ -47,6 +48,7 @@ def create_app() -> FastAPI:
     # (e.g. /api/course/{id}/hole/{n}) but return richer payloads (metrics/weather/features).
     # Register compat first so it takes precedence.
     app.include_router(caddie_compat_router, prefix="/api")
+    app.include_router(caddie_api_router, prefix="/api")
     app.include_router(course_router, prefix="/api")
 
     return app
