@@ -6,7 +6,7 @@ from functools import lru_cache
 from typing import Any
 from urllib.parse import urlencode
 
-import requests
+from app.legacy.open_meteo_client import fetch_json
 
 _OPEN_METEO_ELEVATION = "https://api.open-meteo.com/v1/elevation"
 
@@ -19,14 +19,8 @@ _ELEV_CACHE_REV = 1
 
 
 def _open_meteo_get(url: str) -> dict[str, Any] | None:
-    try:
-        r = requests.get(url, headers={"User-Agent": "golf-caddy-app/1.0"}, timeout=12)
-        if r.status_code != 200:
-            return None
-        out = r.json()
-        return out if isinstance(out, dict) else None
-    except (requests.RequestException, ValueError):
-        return None
+    out, _err = fetch_json(url, timeout=20.0)
+    return out
 
 
 @lru_cache(maxsize=4096)

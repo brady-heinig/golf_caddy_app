@@ -2,11 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import math
+import time
 from typing import Any
 
-import requests
+from app.legacy.open_meteo_client import fetch_json
 
 OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+# Dedupe rapid identical requests; only store successful payloads (not errors).
+_weather_ok_cache: dict[tuple[float, float], tuple[float, dict[str, Any]]] = {}
+_WEATHER_TTL_S = 600.0
+_WEATHER_CACHE_MAX = 512
 
 _WMO_CONDITIONS: dict[int, str] = {
     0: "Clear sky",
@@ -140,8 +146,8 @@ def _empty_error_dict(err: str) -> dict[str, Any]:
     }
 
 
-def get_weather(lat: float, lon: float) -> dict[str, Any]:
-    params = {
+def _weather_params(lat: float, lon: float) -> dict[str, Any]:
+    return {
         "latitude": lat,
         "longitude": lon,
         "current": ",".join(
@@ -158,20 +164,26 @@ def get_weather(lat: float, lon: float) -> dict[str, Any]:
         "temperature_unit": "fahrenheit",
         "forecast_days": 1,
     }
+
+
+def get_weather(lat: float, lon: float) -> dict[str, Any]:
+    lat_r, lon_r = round(float(lat), 4), round(float(lon), 4)
+    key = (lat_r, lon_r)
+    now = time.monotonic()
+    hit = _weather_ok_cache.get(key)
+    if hit and hit[0] > now:
+        return hit[1]
+
+    params = _weather_params(lat_r, lon_r)
+    data, err = fetch_json(OPEN_METEO_URL, params=params, timeout=20.0)
+    if err or not data:
+        return _empty_error_dict(err or "empty response")
     try:
-        r = requests.get(
-            OPEN_METEO_URL,
-            params=params,
-            timeout=15,
-            headers={"User-Agent": "golf-caddy-backend/1.0"},
-        )
-        r.raise_for_status()
-        data = r.json()
         cur = data.get("current") or {}
         wc = int(cur.get("weather_code", 0))
         wind_deg = int(round(float(cur.get("wind_direction_10m", 0))))
         fetched = datetime.now(timezone.utc).isoformat()
-        return {
+        out = {
             "temp_f": float(cur.get("temperature_2m", 0)),
             "humidity_pct": int(round(float(cur.get("relative_humidity_2m", 0)))),
             "wind_mph": float(cur.get("wind_speed_10m", 0)),
@@ -181,6 +193,10 @@ def get_weather(lat: float, lon: float) -> dict[str, Any]:
             "condition": _WMO_CONDITIONS.get(wc, f"Weather code {wc}"),
             "fetched_at": fetched,
         }
-    except Exception as e:
+        if len(_weather_ok_cache) >= _WEATHER_CACHE_MAX:
+            _weather_ok_cache.pop(next(iter(_weather_ok_cache)), None)
+        _weather_ok_cache[key] = (now + _WEATHER_TTL_S, out)
+        return out
+    except (TypeError, ValueError) as e:
         return _empty_error_dict(str(e))
 
