@@ -9,6 +9,14 @@ export default function HomePage() {
             and hazards.
           </p>
           <div className="grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))" }}>
+            <a className="card" href="/caddie">
+              <div className="cardBody">
+                <div style={{ fontWeight: 650, marginBottom: 6 }}>Caddie (prototype UI)</div>
+                <div className="muted" style={{ fontSize: 13 }}>
+                  Live/sim map + plays-like yardages (ported from `caddie/`)
+                </div>
+              </div>
+            </a>
             <a className="card" href="/settings">
               <div className="cardBody">
                 <div style={{ fontWeight: 650, marginBottom: 6 }}>Settings</div>

@@ -12,6 +12,7 @@ from .routes_me import router as me_router
 from .routes_rounds import router as rounds_router
 from .routes_chat import router as chat_router
 from .routes_course import router as course_router
+from .routes_caddie_compat import router as caddie_compat_router
 from .repos import ensure_default_user
 
 
@@ -43,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(rounds_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")
     app.include_router(course_router, prefix="/api")
+    app.include_router(caddie_compat_router, prefix="/api")
 
     return app
 

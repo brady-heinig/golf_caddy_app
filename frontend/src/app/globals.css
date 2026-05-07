@@ -178,3 +178,396 @@ code {
   color: rgba(255, 255, 255, 0.85);
 }
 
+/* --- Caddie prototype UI (ported from `caddie/frontend/src/styles.css`) --- */
+:root {
+  --phoneW: 390px;
+  --phoneH: 844px;
+  --caddie-bg: #0b1220;
+  --caddie-card: #ffffff;
+  --caddie-text: #0b1220;
+  --caddie-muted: rgba(11, 18, 32, 0.65);
+  --caddie-shadow: 0 16px 44px rgba(0, 0, 0, 0.35);
+  --caddie-accent: #16a34a;
+  --caddie-accent-weak: rgba(22, 163, 74, 0.14);
+  --caddie-accent-weak2: rgba(22, 163, 74, 0.22);
+  --caddie-accent-mid: rgba(22, 163, 74, 0.35);
+  --caddie-accent-strong: rgba(22, 163, 74, 0.9);
+  --caddie-accent-bg: rgba(22, 163, 74, 0.1);
+}
+
+.phoneShell {
+  width: min(100vw, var(--phoneW));
+  height: min(100dvh, var(--phoneH));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  box-sizing: border-box;
+  margin: 0 auto;
+}
+
+.modePickerShell {
+  justify-content: center;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.modePickerCard {
+  background: var(--caddie-card);
+  color: var(--caddie-text);
+  border-radius: 16px;
+  padding: 18px;
+  box-shadow: var(--caddie-shadow);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  text-align: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.modePickerTitle {
+  font-size: 22px;
+  font-weight: 1000;
+  margin: 0 0 8px 0;
+}
+
+.modePickerSub {
+  font-size: 14px;
+  font-weight: 700;
+  opacity: 0.72;
+  margin: 0 0 14px 0;
+  line-height: 1.35;
+}
+
+.modePickerBtns {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.modePickerBtn {
+  height: 52px;
+  border-radius: 14px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.95);
+  font-weight: 900;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--caddie-text);
+}
+
+.modePickerBtnPrimary {
+  background: var(--caddie-accent);
+  color: white;
+  border: none;
+}
+
+.modePickerHint {
+  margin-top: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.6;
+  line-height: 1.35;
+}
+
+.bar {
+  background: var(--caddie-card);
+  color: var(--caddie-text);
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.18);
+  border: 1px solid rgba(0, 0, 0, 0.1);
+  box-sizing: border-box;
+}
+
+.header {
+  height: 68px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.metricLabel {
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+  opacity: 0.65;
+}
+
+.metricValue {
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.metricValueRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.metricHeadWrap {
+  position: relative;
+}
+
+.distInfoBtn {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(11, 18, 32, 0.22);
+  background: rgba(11, 18, 32, 0.06);
+  color: rgba(11, 18, 32, 0.72);
+  font-size: 11px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.distInfoPopover {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 6px;
+  z-index: 30;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #0b1220;
+  color: #e6edf3;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: left;
+  min-width: 200px;
+  max-width: min(280px, 92vw);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.distInfoPopover.open {
+  display: block;
+}
+
+.diBreakRow,
+.ycBreakRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.distInfoElevPos {
+  color: #3fd671;
+}
+.distInfoElevNeg {
+  color: #ff7b72;
+}
+.distInfoWindAdds {
+  color: #3fd671;
+  font-weight: 700;
+}
+.distInfoWindHelps {
+  color: #ff7b72;
+  font-weight: 700;
+}
+.distInfoWindNeutral {
+  color: inherit;
+  opacity: 0.9;
+  font-weight: 700;
+}
+
+.yardChipHost {
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #f6f8fc;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1.25;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: auto;
+}
+.yardChipRow {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.yardChipRow > span:first-of-type {
+  color: #f6f8fc;
+  text-shadow: 0 0 4px rgba(0, 0, 0, 0.95), 0 1px 3px rgba(0, 0, 0, 0.9), 0 0 1px rgba(0, 0, 0, 1);
+}
+.yardChipInfoBtn {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.65);
+  background: rgba(0, 0, 0, 0.2);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 1px 2px rgba(0, 0, 0, 0.9);
+}
+.yardChipPopover {
+  display: none;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #0b1220;
+  color: #e6edf3;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  min-width: 148px;
+  max-width: 220px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  z-index: 25;
+}
+.yardChipPopover .ycMuted {
+  opacity: 0.72;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.yardChipElevPos {
+  color: #3fd671;
+}
+.yardChipElevNeg {
+  color: #ff7b72;
+}
+.yardChipWindAdds {
+  color: #3fd671;
+  font-weight: 700;
+}
+.yardChipWindHelps {
+  color: #ff7b72;
+  font-weight: 700;
+}
+.yardChipWindNeutral {
+  color: inherit;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.metricSub {
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.mapCard {
+  flex: 1 1 auto;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--caddie-shadow);
+  border: 0;
+  position: relative;
+}
+
+.mapCard .maplibregl-ctrl-top-left,
+.mapCard .maplibregl-ctrl-top-right,
+.mapCard .maplibregl-ctrl-bottom-left,
+.mapCard .maplibregl-ctrl-bottom-right {
+  display: none !important;
+}
+
+.footer {
+  height: 72px;
+  display: grid;
+  align-items: center;
+  gap: 10px;
+}
+
+.mapHud {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+  pointer-events: none;
+  background: rgba(255, 255, 255, 0.9);
+  color: #111827;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.windHud {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.9);
+  color: #111827;
+  border: 1px solid rgba(0, 0, 0, 0.08);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.22);
+}
+
+.windArrow {
+  width: 28px;
+  height: 28px;
+  position: relative;
+  transform: rotate(var(--wind-rot, 0deg));
+  transform-origin: 50% 50%;
+}
+.windArrowStem {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 16px;
+  background: #111827;
+  border-radius: 3px;
+  transform: translate(-50%, -10%);
+  z-index: 1;
+}
+.windArrowHead {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  border-bottom: 12px solid #111827;
+  transform: translate(-50%, -120%);
+  z-index: 2;
+}
+.windText {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1;
+}
+.windLine1 {
+  font-size: 13px;
+  font-weight: 900;
+}
+.windLine2 {
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.75;
+}
+
