@@ -235,6 +235,30 @@ a:hover {
   background: rgba(255, 255, 255, 0.10);
 }
 
+/* Ensure caddie UI buttons are readable (override app-wide .btn). */
+.phoneShell .btn {
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--caddie-text);
+  font-weight: 900;
+}
+
+.phoneShell .btn:active {
+  transform: translateY(1px);
+}
+
+.phoneShell .btnPrimary {
+  background: var(--caddie-accent);
+  color: #ffffff;
+  border: none;
+}
+
+.phoneShell .footer {
+  grid-template-columns: 1.1fr 0.6fr 1fr 0.6fr 1.6fr;
+}
+
 input,
 select,
 textarea {
