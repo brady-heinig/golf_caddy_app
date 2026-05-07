@@ -284,7 +284,7 @@ export function CaddieApp() {
   });
   const [showHolePicker, setShowHolePicker] = useState<boolean>(false);
   const [showCaddieAdvice, setShowCaddieAdvice] = useState(false);
-  const [caddieLie, setCaddieLie] = useState("fairway");
+  const [caddieLie, setCaddieLie] = useState("tee");
   const [caddieShape, setCaddieShape] = useState("straight");
   const [caddieMessage, setCaddieMessage] = useState("");
   const [caddieLoading, setCaddieLoading] = useState(false);
@@ -1371,8 +1371,8 @@ export function CaddieApp() {
             </div>
             <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
               <div style={{ fontSize: 13, color: "rgba(11,18,32,0.7)" }}>
-                Uses your position, map bend (landing), distances, wind/elevation, hazards near the landing zone, green
-                geometry, and bag yardages from Settings.
+                Uses the blue-dot position, the white map target (landing), hole geometry (fairways/bunkers from map data),
+                wind and elevation, and your bag from Settings. First shot from the tee: set Lie to Tee.
               </div>
               <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
                 <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
@@ -1383,10 +1383,10 @@ export function CaddieApp() {
                     aria-label="Lie"
                     style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid rgba(11,18,32,0.2)" }}
                   >
+                    <option value="tee">Tee</option>
                     <option value="fairway">Fairway</option>
                     <option value="rough">Rough</option>
                     <option value="bunker">Bunker</option>
-                    <option value="tee">Tee</option>
                     <option value="trees">Trees / trouble</option>
                   </select>
                 </label>

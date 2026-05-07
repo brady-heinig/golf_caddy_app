@@ -7,6 +7,7 @@ import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
+from .bag_selection import club_name_for_plays_like_yards as _club_suggestion_from_bag
 from .deps import get_conn, get_current_user
 from .legacy import benchmark_stats as bench_mod
 from .legacy import course_data
@@ -22,6 +23,8 @@ SYSTEM_PROMPT = (
     "- Follow with 2–4 sentences of reasoning\n"
     "- Account for wind, lie, shot shape tendency, and hazard positions\n"
     "- Reference the player's handicap-adjusted green/proximity expectations\n"
+    "- For club vs distance: use the **most lofted club in their bag whose listed carry is still >=** the "
+    "plays-like yards (same rule as SEED CLUB in context)\n"
     "- Keep total response under 140 words — the player is on the course\n\n"
     "Format your response exactly like this:\n"
     "CLUB: [club name]\n"
@@ -70,23 +73,6 @@ def _get_user_settings(conn: psycopg.Connection, user_id: int) -> dict[str, Any]
     bag = json.loads(row["bag_json"]) if row["bag_json"] else {}
     h = row["handicap_index"] if row["handicap_index"] is not None else 15.0
     return {"handicap_index": float(h), "bag": bag}
-
-
-def _club_suggestion_from_bag(bag: dict[str, Any], plays_like_yd: float) -> str:
-    # bag values are yardages; choose closest >= (or closest overall if all shorter)
-    pairs: list[tuple[str, float]] = []
-    for k, v in bag.items():
-        try:
-            pairs.append((str(k), float(v)))
-        except Exception:
-            continue
-    if not pairs:
-        return "Unknown"
-    pairs.sort(key=lambda kv: kv[1])
-    for club, yd in pairs:
-        if yd >= plays_like_yd:
-            return club
-    return pairs[-1][0]
 
 
 def _build_context(

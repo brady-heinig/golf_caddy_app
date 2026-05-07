@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import math
 import os
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 from shapely.geometry import Point, shape
 from shapely.ops import nearest_points
 
+from .caddie_shot_intel import gather_shot_intel
 from .legacy import weather
 from .routes_caddie_compat import haversine_yards
 
@@ -174,12 +176,24 @@ def build_caddie_advice_context(
     player_lon: float,
     landing_lat: float,
     landing_lon: float,
+    landing_meta: dict[str, Any],
     lie: str,
     shot_shape: str,
     handicap: float,
     bag: dict[str, Any],
-    seed_club: str,
 ) -> str:
+    intel = gather_shot_intel(
+        hole=hole,
+        features=features,
+        player_lat=player_lat,
+        player_lon=player_lon,
+        landing_lat=landing_lat,
+        landing_lon=landing_lon,
+        landing_meta=dict(landing_meta),
+        bag=bag,
+        lie=lie,
+        metrics=metrics,
+    )
     hz_osm = hazards_near_landing(features, landing_lat, landing_lon)
     hz_static = hole.get("hazards") or []
     static_lines: list[str] = []
@@ -208,6 +222,10 @@ def build_caddie_advice_context(
     land_dist_gc = round(haversine_yards(landing_lat, landing_lon, float(hole["green_center"]["lat"]), float(hole["green_center"]["lon"])))
 
     parts = [
+        "=== STRUCTURED_SHOT_INTEL (computed from map/OSM + blue-dot position; treat as facts) ===",
+        json.dumps(intel, indent=2),
+        "",
+        "=== NARRATIVE_SUPPLEMENT (same hole, for readability) ===",
         f"COURSE: {course_name or course_id} ({course_id})",
         f"HOLE: {hole.get('number')} | Par {hole.get('par')} | Hdcp {hole.get('handicap')} | Card {hole.get('yards')} yd",
         "",
@@ -223,8 +241,9 @@ def build_caddie_advice_context(
         "WEATHER:",
         f"  {wx_line}",
         "",
-        "LANDING ZONE (intended carry target for hazard check):",
-        f"  ~{land_dist_gc} yd from pin; coords used for nearby hazards: {landing_lat:.6f}, {landing_lon:.6f}",
+        "LANDING ZONE (used above + hazard search):",
+        f"  ~{land_dist_gc} yd from pin; landing lat/lon: {landing_lat:.6f}, {landing_lon:.6f}",
+        f"  How landing was set: {landing_meta.get('how', 'unknown')}",
         "",
         "OSM / COURSE FEATURES NEAR LANDING (approx.):",
         ("\n".join(f"- {x}" for x in hz_osm) if hz_osm else "- None flagged within ~60 yd of landing target"),
@@ -235,9 +254,11 @@ def build_caddie_advice_context(
         "GREEN & MISS SIDE (geometry hint):",
         green_txt,
         "",
-        "PLAYER BAG (carry distances — primary for club choice):",
+        "PLAYER BAG (carry distances — club vs adjusted plays-like is computed in STRUCTURED_SHOT_INTEL):",
         format_bag_lines(bag),
         "",
-        f"SEED CLUB FROM BAG vs plays-like ({plays} yd): {seed_club}",
+        "CLUB VS ADJUSTED DISTANCE:",
+        f"  See STRUCTURED_SHOT_INTEL.club_for_adjusted_plays_like — "
+        f"recommended club is the smallest listed carry still >= {plays} yd plays-like.",
     ]
     return "\n".join(parts)
