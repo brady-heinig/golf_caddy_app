@@ -43,8 +43,11 @@ def create_app() -> FastAPI:
     app.include_router(me_router, prefix="/api")
     app.include_router(rounds_router, prefix="/api")
     app.include_router(chat_router, prefix="/api")
-    app.include_router(course_router, prefix="/api")
+    # Important: caddie-compat endpoints intentionally overlap some legacy course routes
+    # (e.g. /api/course/{id}/hole/{n}) but return richer payloads (metrics/weather/features).
+    # Register compat first so it takes precedence.
     app.include_router(caddie_compat_router, prefix="/api")
+    app.include_router(course_router, prefix="/api")
 
     return app
 
