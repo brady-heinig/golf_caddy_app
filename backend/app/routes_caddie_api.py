@@ -28,26 +28,36 @@ router = APIRouter(prefix="/caddie", tags=["caddie"])
 
 CADDIE_ADVICE_SYSTEM = (
     "You are an experienced on-course golf caddie. The user message includes STRUCTURED_SHOT_INTEL JSON: "
-    "player position, lie/shot_type, intended landing, bunkers and water/OB along the corridor, fairway width at landing, "
-    "shot_shape_from_settings, then **club_suggestion** (second-to-last object), then **next_shot_if_plan_works** (last). "
-    "Treat that JSON as ground truth from the map/geometry.\n"
-    "club_suggestion includes: bag_match_for_adjusted_plays_like (smallest listed carry still >= adjusted plays-like yards), "
-    "go_for_it (whether a driver/fairway wood could realistically reach the green in one without severe hazard on the "
-    "full direct line), ideal_remaining_yds_next_shot when a positional layup applies from the tee or fairway (including "
-    "recovery lies), plus rationale strings. Read go_for_it_rationale and ideal_remaining_note; do not contradict the booleans "
-    "without strong on-course reason.\n"
-    "If STRUCTURED_SHOT_INTEL conflicts with narrative text, trust the JSON.\n"
-    "Weigh lie, wind/plays-like, corridor trouble, fairway width, shot shape, go_for_it, and ideal layup yardage before "
-    "your final club call; default to bag_match_for_adjusted_plays_like unless safety, dogleg/position, or a knockdown clearly "
-    "warrants less club.\n"
+    "facts from the map/OSM plus modeling. Key sections (in order): shot_shape_from_settings, player_position, "
+    "lie_and_situation, intended_landing_target, bunkers/trouble along the planned corridor, fairway_at_landing, "
+    "then **club_recommendation** (second-to-last object), then **next_shot_if_plan_works** (last object).\n"
+    "Treat STRUCTURED_SHOT_INTEL as ground truth if it conflicts with narrative prose.\n\n"
+    "**club_recommendation** includes:\n"
+    "- go_for_it + go_for_it_explanation: whether a driver/fairway-wood could realistically reach or effectively "
+    "carry the green line per bag carries AND whether severe hazard pinches that landing (model heuristic).\n"
+    "- ideal_second_shot_distance_yds / suggested_layup_carry_yds: when dogleg or hazards argue against "
+    "‘driver everywhere’, these hint an ideal remaining yardage for the next shot or a tee layup carry.\n"
+    "- club_for_adjusted_plays_like: bag algorithm — **smallest listed carry ≥ adjusted plays-like yards** "
+    "(most loft that still covers the number).\n"
+    "You must weigh corridor hazards, fairway width at landing, lie, wind/elevation (narrative), go_for_it, "
+    "and any ideal layup fields **before** writing CLUB. Choose less club, a knockdown, or a layup when those "
+    "fields contradict a naive full swing with club_for_adjusted_plays_like.\n\n"
+    "Lie comes from the blue dot vs OSM polygons; shot_shape_from_settings matches driver vs woods vs irons buckets.\n"
     "If the bag is empty or incomplete, say so briefly and still give safe guidance.\n\n"
-    "OUTPUT FORMAT — respond with **one single paragraph only** (4–8 sentences, at most ~220 words). "
-    "No section headers, no CURRENT_SHOT / CLUB / AIM / TROUBLE / NEXT_SHOT labels, no bullet lists, no ‘---’ separator. "
-    "Always write distances as the word **yards** (never ‘yds’, ‘yd’, or tilde abbreviations) so text-to-speech sounds natural. "
-    "Speak conversationally: situation and shot type, where to start the ball and how it should curve (reference JSON bunker "
-    "sides), what trouble to respect, whether the fairway looks wide enough at the landing, your club recommendation and "
-    "brief why, whether to go for the green in one with a wood when go_for_it is true or hold back toward ideal_remaining "
-    "when it fits, then close with the likely next shot from next_shot_if_plan_works if it applies."
+    "Format your answer EXACTLY like this (brief labels first; spoken recap last):\n"
+    "CURRENT_SHOT: [e.g. tee ball par-4, layup, approach from fairway]\n"
+    "AIM: [start line / curve; reference bunkers left/right from JSON]\n"
+    "TROUBLE: [what to avoid from bunkers/water lists, or 'clear']\n"
+    "FAIRWAY: [fairway_at_landing width + inside polygon]\n"
+    "GO_FOR_IT: [yes or no — one short clause tied to club_recommendation]\n"
+    "IDEAL_DISTANCE_NOTE: [ideal_second_shot_distance_yds / suggested_layup_carry_yds from JSON when present; "
+    "otherwise 'n/a']\n"
+    "CLUB: [final club + shot type after considering everything above]\n"
+    "NEXT_SHOT: [from next_shot_if_plan_works.summary — shorten if needed]\n"
+    "---\n"
+    "SUMMARY: [3–6 sentences of natural speech ONLY — this is what gets read aloud in the app; "
+    "do not repeat label headers verbatim; synthesize aim, trouble, club choice, and next shot into one "
+    "clear talk-track for the player]\n"
 )
 
 
@@ -63,7 +73,6 @@ class CaddieAdviceIn(BaseModel):
 
 class CaddieAdviceOut(BaseModel):
     assistant: str
-    structured_shot_intel: dict[str, Any]
 
 
 class CaddieTtsIn(BaseModel):
@@ -210,7 +219,7 @@ def caddie_advice(
     club_pick = pick_club_for_plays_like_yards(bag, plays_like)
     eff_shape = shot_shape_for_club(str(club_pick["club"]), shot_shapes_norm)
 
-    ctx, structured_intel = build_caddie_advice_context(
+    ctx = build_caddie_advice_context(
         course_id=body.course_id,
         course_name=course_nm,
         hole=hole,
@@ -245,7 +254,7 @@ def caddie_advice(
         client = anthropic.Anthropic(api_key=api_key)
         msg = client.messages.create(
             model=model,
-            max_tokens=600,
+            max_tokens=500,
             system=CADDIE_ADVICE_SYSTEM,
             messages=[
                 {
@@ -261,7 +270,7 @@ def caddie_advice(
             detail=f"Caddie unavailable: {e}",
         ) from e
 
-    return CaddieAdviceOut(assistant=assistant, structured_shot_intel=structured_intel)
+    return CaddieAdviceOut(assistant=assistant)
 
 
 @router.post("/tts")

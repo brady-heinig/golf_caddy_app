@@ -91,7 +91,7 @@ def hazards_near_landing(
             # focus on trouble / boundaries for advice
             continue
         lbl = _golf_label(str(golf))
-        out.append((d, f"{lbl} (~{round(d)} yards from landing target)"))
+        out.append((d, f"{lbl} (~{round(d)} yd from landing target)"))
     out.sort(key=lambda x: x[0])
     return [t[1] for t in out[:limit]]
 
@@ -161,7 +161,7 @@ def format_bag_lines(bag: dict[str, Any], limit: int = 24) -> str:
     pairs.sort(key=lambda kv: kv[1], reverse=True)
     if not pairs:
         return "- (No bag saved — ask an experienced baseline and note the player should fill Settings.)"
-    lines = [f"- {c}: {round(y)} yards carry" for c, y in pairs[:limit]]
+    lines = [f"- {c}: {round(y)} yd carry" for c, y in pairs[:limit]]
     return "\n".join(lines)
 
 
@@ -183,7 +183,7 @@ def build_caddie_advice_context(
     bag: dict[str, Any],
     shot_shapes: dict[str, Any] | None,
     lie_detect_meta: dict[str, Any] | None = None,
-) -> tuple[str, dict[str, Any]]:
+) -> str:
     intel = gather_shot_intel(
         hole=hole,
         features=features,
@@ -197,6 +197,7 @@ def build_caddie_advice_context(
         metrics=metrics,
         shot_shapes=shot_shapes,
         lie_detect_detail=lie_detect_meta,
+        handicap=handicap,
     )
     hz_osm = hazards_near_landing(features, landing_lat, landing_lon)
     hz_static = hole.get("hazards") or []
@@ -231,13 +232,13 @@ def build_caddie_advice_context(
         "",
         "=== NARRATIVE_SUPPLEMENT (same hole, for readability) ===",
         f"COURSE: {course_name or course_id} ({course_id})",
-        f"HOLE: {hole.get('number')} | Par {hole.get('par')} | Hdcp {hole.get('handicap')} | Card {hole.get('yards')} yards",
+        f"HOLE: {hole.get('number')} | Par {hole.get('par')} | Hdcp {hole.get('handicap')} | Card {hole.get('yards')} yd",
         "",
         "SHOT (next from current position):",
-        f"  True distance to pin: {d_pin} yards",
-        f"  Elevation adjustment:   {elev} yards (adds to plays-like)",
-        f"  Wind adjustment:      {wadj} yards ({metrics.get('wind_relation', '—')})",
-        f"  Plays-like distance:  {plays} yards",
+        f"  True distance to pin: {d_pin} yd",
+        f"  Elevation adjustment:   {elev} yd (adds to plays-like)",
+        f"  Wind adjustment:      {wadj} yd ({metrics.get('wind_relation', '—')})",
+        f"  Plays-like distance:  {plays} yd",
         f"  Lie (from blue dot on map): {lie}",
         f"  Shot shape (Settings, {intel['shot_shape_from_settings']['club_category']} bucket): {shot_shape}",
         f"  Est. GIR (model):      {gir}% @ handicap {handicap:.1f}",
@@ -246,11 +247,11 @@ def build_caddie_advice_context(
         f"  {wx_line}",
         "",
         "LANDING ZONE (used above + hazard search):",
-        f"  ~{land_dist_gc} yards from pin; landing lat/lon: {landing_lat:.6f}, {landing_lon:.6f}",
+        f"  ~{land_dist_gc} yd from pin; landing lat/lon: {landing_lat:.6f}, {landing_lon:.6f}",
         f"  How landing was set: {landing_meta.get('how', 'unknown')}",
         "",
         "OSM / COURSE FEATURES NEAR LANDING (approx.):",
-        ("\n".join(f"- {x}" for x in hz_osm) if hz_osm else "- None flagged within ~60 yards of landing target"),
+        ("\n".join(f"- {x}" for x in hz_osm) if hz_osm else "- None flagged within ~60 yd of landing target"),
         "",
         "NOTE CARD / STATIC HAZARDS:",
         ("\n".join(static_lines) if static_lines else "- None recorded for this hole"),
@@ -261,8 +262,9 @@ def build_caddie_advice_context(
         "PLAYER BAG (carry distances — club vs adjusted plays-like is computed in STRUCTURED_SHOT_INTEL):",
         format_bag_lines(bag),
         "",
-        "CLUB VS ADJUSTED DISTANCE:",
-        f"  See STRUCTURED_SHOT_INTEL.club_suggestion.bag_match_for_adjusted_plays_like — "
-        f"default club uses smallest listed carry still >= {plays} yards plays-like unless strategy overrides.",
+        "CLUB VS ADJUSTED DISTANCE + STRATEGY:",
+        f"  STRUCTURED_SHOT_INTEL.club_recommendation holds go_for_it, ideal_second_shot_distance_yds, "
+        f"suggested_layup_carry_yds, and club_for_adjusted_plays_like (bag rule: smallest listed carry ≥ plays-like). "
+        f"Resolve conflicts using hazards, dogleg note, and landing width before final CLUB.",
     ]
-    return "\n".join(parts), intel
+    return "\n".join(parts)

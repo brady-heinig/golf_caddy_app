@@ -216,6 +216,57 @@ def _project_along_m(
     return (qx - px) * ux + (qy - py) * uy
 
 
+def _ang_diff_deg(a: float, b: float) -> float:
+    return ((a - b + 540) % 360) - 180
+
+
+def _max_long_club_carry_yds(bag: dict[str, Any]) -> float | None:
+    """Longest listed carry among driver / fairway woods / hybrids."""
+    best: float | None = None
+    for k, v in (bag or {}).items():
+        try:
+            yd = float(v)
+        except Exception:
+            continue
+        if yd <= 0:
+            continue
+        if club_shape_category(str(k)) not in ("driver", "woods"):
+            continue
+        best = yd if best is None else max(best, yd)
+    return best
+
+
+def _severe_corridor_endgame_risk(
+    bunkers: list[dict[str, Any]],
+    trouble: list[dict[str, Any]],
+    nominal_carry_yds: float | None,
+) -> tuple[bool, str]:
+    """Heuristic: hazards tight to the landing / green end of the corridor."""
+    if nominal_carry_yds and nominal_carry_yds > 35:
+        tail_start = 0.52 * nominal_carry_yds
+        hot_b = [
+            b
+            for b in bunkers
+            if float(b.get("distance_to_shot_line_yds") or 999) <= 30
+            and float(b.get("approx_along_carry_from_ball_yds") or 0) >= tail_start
+        ]
+        if len(hot_b) >= 2:
+            return True, "Multiple bunkers pinch the landing zone."
+        if hot_b and float(hot_b[0].get("distance_to_shot_line_yds") or 999) <= 18:
+            return True, "Bunker tight to intended landing."
+    for t in trouble:
+        gt = str(t.get("golf_type", ""))
+        dln = float(t.get("distance_to_shot_line_yds") or 999)
+        if dln <= 42 and ("water" in gt or gt == "out_of_bounds"):
+            return True, "Water or OB encroaches the playing corridor."
+    return False, ""
+
+
+def _ideal_approach_remain_yds(handicap: float | None) -> int:
+    h = float(handicap if handicap is not None else 15.0)
+    return int(round(min(145, max(88, 122.0 - (h - 12.0) * 1.5))))
+
+
 def hazards_along_corridor(
     features: dict[str, Any],
     player_lat: float,
@@ -280,156 +331,6 @@ def hazards_along_corridor(
     return out[:14]
 
 
-def _trouble_severe_along_line_to_green(
-    features: dict[str, Any],
-    player_lat: float,
-    player_lon: float,
-    gc_lat: float,
-    gc_lon: float,
-) -> tuple[bool, str]:
-    trouble_pin = hazards_along_corridor(
-        features,
-        player_lat,
-        player_lon,
-        gc_lat,
-        gc_lon,
-        ("water_hazard", "lateral_water_hazard", "out_of_bounds"),
-        cross_max_yds=72.0,
-    )
-    worst = []
-    for h in trouble_pin:
-        d = h["distance_to_shot_line_yds"]
-        gt = h["golf_type"]
-        if gt == "out_of_bounds" and d < 40:
-            worst.append(f"OB within ~{d} yards of the line to the green")
-        elif gt in ("water_hazard", "lateral_water_hazard") and d < 32:
-            worst.append(f"Water within ~{d} yards of the line to the green")
-    if worst:
-        return True, "; ".join(worst[:3])
-    return False, ""
-
-
-def _compute_go_for_it(
-    *,
-    long_carry_yd: float | None,
-    plays_like_yd: float,
-    shot_type: str,
-    lie_l: str,
-    near_tee: bool,
-    severe_to_green: bool,
-    severe_note: str,
-) -> tuple[bool, str]:
-    if long_carry_yd is None or long_carry_yd < 175:
-        return False, (
-            "Cannot flag go-for-it: no driver/wood carry on file (or carry too short) to compare to distance."
-        )
-    if shot_type == "tee_par3":
-        return False, "Not applicable from a par-3 tee — you are playing into the green on this stroke."
-    long_band_max = long_carry_yd * 0.98
-    if plays_like_yd > long_band_max:
-        return (
-            False,
-            f"About {plays_like_yd:.0f} yards adjusted plays-like exceeds about {long_carry_yd:.0f} yards long-wood carry; "
-            "reaching the green in one with driver/fairway wood is not realistic.",
-        )
-    # Only flag when a wood/driver could plausibly be the club to finish (or nearly finish) on the green — not wedge range.
-    if plays_like_yd < 125:
-        return (
-            False,
-            "Inside hybrid / iron / wedge range to the green; ‘go for it’ with driver/wood does not apply.",
-        )
-    if severe_to_green:
-        return False, (
-            "Severe hazard tight on the line to the green — "
-            f"{severe_note or 'favor position over forcing the carry.'}"
-        )
-    if lie_l in ("bunker", "rough", "trees") and not near_tee:
-        return False, "Penal lie from the fairway; trying to reach the green in one is usually the wrong risk."
-    return (
-        True,
-        "Long wood can realistically reach the green in one from here, without severe hazard tucked on that line.",
-    )
-
-
-def _ideal_remaining_yds_next_shot(
-    *,
-    go_for_it: bool,
-    shot_type: str,
-    near_tee: bool,
-    par: int,
-    rem_after_modeled_landing_yd: float,
-    plays_like_yd: float,
-) -> tuple[int | None, str]:
-    """Yards to pin you'd like to leave after a positional layup (dogleg / strategy)."""
-    if go_for_it:
-        return None, (
-            "N/A — you are playing to finish or get as close as the situation allows."
-        )
-
-    r = float(rem_after_modeled_landing_yd)
-
-    def _tee_par45_ideal() -> tuple[int, str]:
-        awkward = r < 62 and plays_like_yd > 260
-        if awkward:
-            target = int(min(max(105, round(plays_like_yd * 0.34)), 148))
-            return (
-                target,
-                "Modeled landing would leave a very short partial wedge; a shorter tee club to leave about "
-                f"{target} yards is often cleaner.",
-            )
-        target = int(min(max(round(r), 85), 160))
-        return (
-            target,
-            "After a solid positional tee shot, many players like roughly this much left "
-            f"(about {target} yards from the modeled landing). Adjust for wind and slope.",
-        )
-
-    if shot_type == "tee_par4_or_5" and near_tee:
-        t, msg = _tee_par45_ideal()
-        return t, msg
-
-    if shot_type == "tee_par3":
-        return None, "Par 3: this stroke targets the green — no separate lay-up yardage target."
-
-    if shot_type not in ("fairway_approach", "bunker", "recovery"):
-        return None, "Ideal leave distance does not apply for this situation."
-
-    if shot_type == "fairway_approach" and par < 5 and plays_like_yd < 175:
-        return None, "Approach-range shot on a par 4 — ideal lay-up yardage for a later shot does not apply."
-
-    if par <= 3 and plays_like_yd < 120:
-        return None, "Short iron or wedge range into the green — ideal lay-up yardage does not apply."
-
-    if plays_like_yd < 95:
-        return None, "Close enough that ideal yards-left for a later shot is not the main question."
-
-    awkward_f = r < 58 and plays_like_yd > 165
-    if awkward_f:
-        target = int(min(max(100, round(plays_like_yd * 0.36)), 145))
-        ctx = (
-            "From the fairway"
-            if shot_type == "fairway_approach"
-            else "From this lie"
-        )
-        return (
-            target,
-            f"{ctx}, the modeled landing leaves an awkward in-between yardage; laying back to leave about "
-            f"{target} yards for the next full shot can simplify the hole.",
-        )
-
-    target = int(min(max(round(r), 82), 165))
-    ctx = (
-        "From the fairway"
-        if shot_type == "fairway_approach"
-        else "From this recovery position"
-    )
-    return (
-        target,
-        f"{ctx}, if you play for the intended lay-up zone, about {target} yards remaining is a reasonable "
-        "stock yardage for the following shot (adjust for hazards and pin).",
-    )
-
-
 def gather_shot_intel(
     *,
     hole: dict[str, Any],
@@ -444,6 +345,7 @@ def gather_shot_intel(
     metrics: dict[str, Any],
     shot_shapes: dict[str, Any] | None,
     lie_detect_detail: dict[str, Any] | None = None,
+    handicap: float | None = None,
 ) -> dict[str, Any]:
     tee = hole["tee"]
     gc = hole["green_center"]
@@ -510,60 +412,120 @@ def gather_shot_intel(
     eff_shape = shot_shape_for_club(cur_club_name, shapes_norm)
     shape_bucket = club_shape_category(cur_club_name)
     par_int = par
+
+    max_long = _max_long_club_carry_yds(bag)
+    reachable_long = max_long is not None and plays_like <= float(max_long) * 0.93
+
+    bunkers_green = hazards_along_corridor(
+        features,
+        player_lat,
+        player_lon,
+        gclat,
+        gclon,
+        ("bunker",),
+        cross_max_yds=58.0,
+    )
+    trouble_green = hazards_along_corridor(
+        features,
+        player_lat,
+        player_lon,
+        gclat,
+        gclon,
+        ("water_hazard", "lateral_water_hazard", "out_of_bounds"),
+        cross_max_yds=82.0,
+    )
+    nominal_green_carry = plays_like * 0.92 if plays_like > 0 else None
+    green_risk, green_risk_why = _severe_corridor_endgame_risk(
+        bunkers_green,
+        trouble_green,
+        nominal_green_carry,
+    )
+
+    lie_blocks_long = lie_l in ("bunker",)
+    long_club_territory = shot_type == "tee_par4_or_5" or (
+        shot_type == "fairway_approach" and plays_like >= 215.0
+    )
+    go_for_it = bool(
+        reachable_long
+        and not lie_blocks_long
+        and par_int != 3
+        and long_club_territory
+        and not green_risk
+    )
+
+    br_tee_pin = float(weather.bearing_deg_lat_lon(tlat, tlon, gclat, gclon))
+    br_pl_pin = float(weather.bearing_deg_lat_lon(player_lat, player_lon, gclat, gclon))
+    dogleg_turn_deg = abs(_ang_diff_deg(br_pl_pin, br_tee_pin))
+
+    ideal_remain = _ideal_approach_remain_yds(handicap)
+    ideal_second: int | None = None
+    suggested_layup_carry: float | None = None
+
+    if par_int >= 4 and near_tee and dogleg_turn_deg >= 26.0:
+        ideal_second = ideal_remain
+        suggested_layup_carry = round(max(125.0, min(dist_pin - ideal_remain, dist_pin * 0.72)), 1)
+
+    if not go_for_it and reachable_long and green_risk:
+        ideal_second = ideal_second or ideal_remain
+        cap = float(max_long or dist_pin * 0.58)
+        suggested_layup_carry = suggested_layup_carry or round(max(140.0, min(dist_pin - ideal_remain, cap)), 1)
+
+    if go_for_it:
+        go_expl = (
+            "Listed driver/wood carry can get you home or very close and the modeled line to the green "
+            "does not show severe hazard tight to the landing zone."
+        )
+    else:
+        bits: list[str] = []
+        if par_int == 3:
+            bits.append("Par 3: treat this as a green attack with an appropriate scoring club, not a driver decision.")
+        elif not reachable_long:
+            bits.append("Pin plays beyond realistic driver/wood carry for this bag.")
+        if green_risk:
+            bits.append(green_risk_why)
+        if lie_blocks_long:
+            bits.append("Poor lie — forcing a long club to reach the green is usually unwise.")
+        if par_int >= 4 and near_tee and dogleg_turn_deg >= 26.0:
+            bits.append(f"Dogleg geometry (~{dogleg_turn_deg:.0f}° vs tee line) often favors a positional tee ball.")
+        if not bits:
+            bits.append("Prefer the positional play implied by hazards, landing width, and bag distances.")
+        go_expl = " ".join(bits)
+
+    club_recommendation: dict[str, Any] = {
+        "go_for_it": go_for_it,
+        "go_for_it_explanation": go_expl,
+        "ideal_second_shot_distance_yds": ideal_second,
+        "suggested_layup_carry_yds": suggested_layup_carry,
+        "dogleg_turn_vs_tee_line_deg": round(dogleg_turn_deg, 1),
+        "reachable_with_long_club_per_bag": reachable_long,
+        "severe_hazard_on_green_line": green_risk,
+        "club_for_adjusted_plays_like": current_club_pick,
+        "selection_notes": (
+            "After weighing go_for_it, dogleg / ideal layup numbers, corridor hazards, lie, and wind/elevation "
+            "(in narrative), set CLUB to match intent: pure bag-distance club for full shot to target, OR a shorter "
+            "club / knockdown / layup when ideal_second_shot_distance_yds or hazards argue against the long club."
+        ),
+    }
+
     if shot_type == "tee_par4_or_5" and carry_planned:
         next_lbl = (
-            f"If this tee ball covers about {int(carry_planned)} yards as intended, next shot is roughly "
-            f"{int(rem_pin)} yards to the pin — often a {next_seed} from a fairway lie."
+            f"If this tee ball covers ~{int(carry_planned)} yd as intended, next shot is roughly "
+            f"{int(rem_pin)} yd to the pin — often a {next_seed} from a fairway lie."
         )
     elif shot_type == "tee_par3":
         next_lbl = "Par 3: this stroke is your green attack; there is no separate ‘next tee shot’."
     else:
         next_lbl = (
-            f"If you find the intended zone, you’d have about {int(rem_pin)} yards left; bag heuristic suggests "
+            f"If you find the intended zone, you’d have about {int(rem_pin)} yd left; bag heuristic suggests "
             f"{next_seed} as a starting point."
         )
 
-    long_wood = _driver_or_longest_wood_yds(bag)
-    severe_green, severe_green_detail = _trouble_severe_along_line_to_green(
-        features, player_lat, player_lon, gclat, gclon
-    )
-    go_for_it, go_for_it_note = _compute_go_for_it(
-        long_carry_yd=long_wood,
-        plays_like_yd=plays_like,
-        shot_type=shot_type,
-        lie_l=lie_l,
-        near_tee=near_tee,
-        severe_to_green=severe_green,
-        severe_note=severe_green_detail,
-    )
-    ideal_rem, ideal_note = _ideal_remaining_yds_next_shot(
-        go_for_it=go_for_it,
-        shot_type=shot_type,
-        near_tee=near_tee,
-        par=par_int,
-        rem_after_modeled_landing_yd=rem_pin,
-        plays_like_yd=plays_like,
-    )
-
-    club_suggestion = {
-        "bag_match_for_adjusted_plays_like": current_club_pick,
-        "longest_driver_or_wood_carry_yds": round(long_wood, 1) if long_wood is not None else None,
-        "go_for_it": go_for_it,
-        "go_for_it_rationale": go_for_it_note,
-        "hazard_check_full_line_to_green": {
-            "severe_hazard_tight_to_direct_line": severe_green,
-            "detail": severe_green_detail or None,
-        },
-        "ideal_remaining_yds_next_shot": ideal_rem,
-        "ideal_remaining_note": ideal_note,
-        "instruction": (
-            "Synthesize ONE final club call only after weighing lie, wind/plays-like, corridor bunkers/water, "
-            "fairway width at landing, shot shape, and whether go_for_it is sensible. Prefer bag_match_for_adjusted_plays_like "
-            "unless safety, dogleg/position, or a knockdown clearly warrants less club."
-        ),
-    }
-
     return {
+        "shot_shape_from_settings": {
+            "club_category": shape_bucket,
+            "shape": eff_shape,
+            "driver_woods_irons_settings": shapes_norm,
+        },
         "player_position": {
             "player_lat": round(player_lat, 6),
             "player_lon": round(player_lon, 6),
@@ -590,12 +552,7 @@ def gather_shot_intel(
         "bunkers_near_tee_shot_corridor": bunkers,
         "major_trouble_near_corridor": trouble,
         "fairway_at_landing": fw,
-        "shot_shape_from_settings": {
-            "club_category": shape_bucket,
-            "shape": eff_shape,
-            "driver_woods_irons_settings": shapes_norm,
-        },
-        "club_suggestion": club_suggestion,
+        "club_recommendation": club_recommendation,
         "next_shot_if_plan_works": {
             "remaining_distance_to_pin_yds": round(rem_pin),
             "club_pick_same_rule": next_club_pick,

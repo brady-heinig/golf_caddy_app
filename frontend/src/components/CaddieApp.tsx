@@ -9,8 +9,6 @@ import * as turf from "@turf/turf";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
-import { CaddieStructuredIntelSummary } from "@/components/CaddieStructuredIntelSummary";
-
 type Course = { id: string; name: string };
 type HoleResp = any;
 type CourseDetail = {
@@ -104,6 +102,16 @@ function formatSignedElevYd(v: number): string {
   const body = Number.isInteger(r) ? `${Math.abs(r)}` : Math.abs(r).toFixed(1);
   if (r === 0) return "0 yd";
   return `${r > 0 ? "+" : "-"}${body} yd`;
+}
+
+/** Prefer the SUMMARY paragraph for voice when the caddie follows the prompt format. */
+function speechTextFromCaddieReply(full: string): string {
+  const trimmed = full.trim();
+  const re = /^SUMMARY:\s*/im;
+  const idx = trimmed.search(re);
+  if (idx < 0) return trimmed;
+  const after = trimmed.slice(idx).replace(re, "").trim();
+  return after || trimmed;
 }
 
 type MapYardChipDetail = {
@@ -289,7 +297,6 @@ export function CaddieApp() {
   const [caddieLoading, setCaddieLoading] = useState(false);
   const [caddieErr, setCaddieErr] = useState<string | null>(null);
   const [caddieReply, setCaddieReply] = useState<string | null>(null);
-  const [caddieStructuredIntel, setCaddieStructuredIntel] = useState<unknown>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsErr, setTtsErr] = useState<string | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -627,8 +634,9 @@ export function CaddieApp() {
   }, [showCaddieAdvice]);
 
   const playCaddieTts = useCallback(async () => {
-    const text = caddieReply?.trim();
-    if (!text) return;
+    const raw = caddieReply?.trim();
+    if (!raw) return;
+    const text = speechTextFromCaddieReply(raw);
     setTtsErr(null);
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
@@ -680,7 +688,8 @@ export function CaddieApp() {
     const raw = caddieReply?.trim();
     if (!raw || typeof window === "undefined" || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
-    const text = raw
+    const spoken = speechTextFromCaddieReply(raw);
+    const text = spoken
       .replace(/\r/g, "")
       .replace(/\n-{3,}\n/g, ". ")
       .replace(/\n+/g, ". ")
@@ -707,7 +716,6 @@ export function CaddieApp() {
     }
     setCaddieLoading(true);
     setCaddieErr(null);
-    setCaddieStructuredIntel(null);
     try {
       const bend = bendMapRef.current;
       const body: Record<string, unknown> = {
@@ -737,12 +745,9 @@ export function CaddieApp() {
         throw new Error(msg || "Request failed");
       }
       setCaddieReply(String((data as { assistant?: string }).assistant ?? ""));
-      const si = (data as { structured_shot_intel?: unknown }).structured_shot_intel;
-      setCaddieStructuredIntel(si !== undefined && si !== null ? si : null);
     } catch (e) {
       setCaddieErr(e instanceof Error ? e.message : String(e));
       setCaddieReply(null);
-      setCaddieStructuredIntel(null);
     } finally {
       setCaddieLoading(false);
     }
@@ -756,7 +761,6 @@ export function CaddieApp() {
   const talkWithCaddie = () => {
     setCaddieErr(null);
     setCaddieReply(null);
-    setCaddieStructuredIntel(null);
     setTtsErr(null);
     setShowCaddieAdvice(true);
   };
@@ -1483,17 +1487,6 @@ export function CaddieApp() {
               {caddieReply ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{caddieReply}</div>
-                  {caddieStructuredIntel !== null ? (
-                    <details className="caddieStructuredIntel">
-                      <summary className="caddieStructuredIntelSummary">
-                        <span className="caddieStructuredIntelSummaryLabel">Selection summary</span>
-                        <span className="caddieStructuredIntelCaret" aria-hidden>
-                          ▼
-                        </span>
-                      </summary>
-                      <CaddieStructuredIntelSummary intel={caddieStructuredIntel} />
-                    </details>
-                  ) : null}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     <button type="button" className="btn btnPrimary" onClick={() => void playCaddieTts()} disabled={ttsLoading}>
                       {ttsLoading ? "Loading voice…" : "Listen (ElevenLabs)"}
