@@ -1,5 +1,6 @@
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") || "http://localhost:8000";
+// Prefer NEXT_PUBLIC_API_BASE_URL when set (local dev or direct-to-backend deployments).
+// Otherwise, default to same-origin and rely on Next.js rewrites (/api/* -> backend).
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL?.replace(/\/+$/, "") || "";
 
 export async function apiFetch(path: string, init?: RequestInit) {
   const url = `${API_BASE}${path.startsWith("/") ? "" : "/"}${path}`;

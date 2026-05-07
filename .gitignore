@@ -8,6 +8,7 @@ frontend/out/
 frontend/.env*.local
 .next/
 .npm-cache/
+**/*.tsbuildinfo
 
 # Python
 **/__pycache__/
