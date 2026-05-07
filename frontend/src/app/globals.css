@@ -50,10 +50,74 @@ body {
   background: rgba(11, 18, 32, 0.35);
 }
 
-.phoneScroll {
-  height: calc(min(100dvh, var(--phoneH)) - 56px);
+.pageScroll {
+  height: min(100dvh, var(--phoneH));
   overflow: auto;
   -webkit-overflow-scrolling: touch;
+}
+
+.landingPhone {
+  height: min(100dvh, var(--phoneH));
+  background: #ffffff;
+  color: #0b1220;
+  display: grid;
+  place-items: center;
+  padding: 18px;
+}
+
+.landingCard {
+  width: 100%;
+  max-width: 340px;
+  display: grid;
+  gap: 14px;
+  text-align: center;
+}
+
+.landingTitle {
+  font-size: 26px;
+  font-weight: 1000;
+  letter-spacing: 0.2px;
+}
+
+.landingSub {
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.72;
+  line-height: 1.35;
+}
+
+.landingBtns {
+  display: grid;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.landingBtn {
+  height: 52px;
+  border-radius: 14px;
+  border: 1px solid rgba(11, 18, 32, 0.14);
+  background: rgba(255, 255, 255, 0.98);
+  color: #0b1220;
+  font-weight: 950;
+  font-size: 16px;
+  display: grid;
+  place-items: center;
+  text-decoration: none;
+}
+
+.landingBtn:hover {
+  text-decoration: none;
+  background: rgba(11, 18, 32, 0.04);
+}
+
+.landingBtnPrimary {
+  background: var(--caddie-accent);
+  color: #ffffff;
+  border: none;
+}
+
+.landingBtnPrimary:hover {
+  background: #12803c;
 }
 
 a {
