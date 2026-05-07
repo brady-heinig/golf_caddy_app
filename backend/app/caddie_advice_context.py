@@ -183,7 +183,7 @@ def build_caddie_advice_context(
     bag: dict[str, Any],
     shot_shapes: dict[str, Any] | None,
     lie_detect_meta: dict[str, Any] | None = None,
-) -> str:
+) -> tuple[str, dict[str, Any]]:
     intel = gather_shot_intel(
         hole=hole,
         features=features,
@@ -265,4 +265,4 @@ def build_caddie_advice_context(
         f"  See STRUCTURED_SHOT_INTEL.club_suggestion.bag_match_for_adjusted_plays_like — "
         f"default club uses smallest listed carry still >= {plays} yards plays-like unless strategy overrides.",
     ]
-    return "\n".join(parts)
+    return "\n".join(parts), intel

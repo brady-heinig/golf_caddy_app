@@ -287,6 +287,7 @@ export function CaddieApp() {
   const [caddieLoading, setCaddieLoading] = useState(false);
   const [caddieErr, setCaddieErr] = useState<string | null>(null);
   const [caddieReply, setCaddieReply] = useState<string | null>(null);
+  const [caddieStructuredIntel, setCaddieStructuredIntel] = useState<unknown>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsErr, setTtsErr] = useState<string | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -704,6 +705,7 @@ export function CaddieApp() {
     }
     setCaddieLoading(true);
     setCaddieErr(null);
+    setCaddieStructuredIntel(null);
     try {
       const bend = bendMapRef.current;
       const body: Record<string, unknown> = {
@@ -733,9 +735,12 @@ export function CaddieApp() {
         throw new Error(msg || "Request failed");
       }
       setCaddieReply(String((data as { assistant?: string }).assistant ?? ""));
+      const si = (data as { structured_shot_intel?: unknown }).structured_shot_intel;
+      setCaddieStructuredIntel(si !== undefined && si !== null ? si : null);
     } catch (e) {
       setCaddieErr(e instanceof Error ? e.message : String(e));
       setCaddieReply(null);
+      setCaddieStructuredIntel(null);
     } finally {
       setCaddieLoading(false);
     }
@@ -749,6 +754,7 @@ export function CaddieApp() {
   const talkWithCaddie = () => {
     setCaddieErr(null);
     setCaddieReply(null);
+    setCaddieStructuredIntel(null);
     setTtsErr(null);
     setShowCaddieAdvice(true);
   };
@@ -1475,6 +1481,17 @@ export function CaddieApp() {
               {caddieReply ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{caddieReply}</div>
+                  {caddieStructuredIntel !== null ? (
+                    <details className="caddieStructuredIntel">
+                      <summary className="caddieStructuredIntelSummary">
+                        <span className="caddieStructuredIntelSummaryLabel">Selection summary</span>
+                        <span className="caddieStructuredIntelCaret" aria-hidden>
+                          ▼
+                        </span>
+                      </summary>
+                      <pre className="caddieStructuredIntelPre">{JSON.stringify(caddieStructuredIntel, null, 2)}</pre>
+                    </details>
+                  ) : null}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     <button type="button" className="btn btnPrimary" onClick={() => void playCaddieTts()} disabled={ttsLoading}>
                       {ttsLoading ? "Loading voice…" : "Listen (ElevenLabs)"}

@@ -957,3 +957,54 @@ code {
   height: 44px;
 }
 
+/* Talk with caddie — collapsible structured shot intel */
+.caddieStructuredIntel {
+  margin-top: 2px;
+  border-top: 1px solid rgba(11, 18, 32, 0.1);
+  padding-top: 10px;
+}
+
+.caddieStructuredIntelSummary {
+  list-style: none;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 4px 10px;
+  user-select: none;
+  color: rgba(11, 18, 32, 0.62);
+  font-size: 12px;
+}
+
+.caddieStructuredIntelSummary::-webkit-details-marker {
+  display: none;
+}
+
+.caddieStructuredIntelSummaryLabel {
+  font-weight: 650;
+}
+
+.caddieStructuredIntelCaret {
+  font-size: 10px;
+  line-height: 1;
+  transition: transform 0.15s ease;
+}
+
+.caddieStructuredIntel[open] .caddieStructuredIntelCaret {
+  transform: rotate(180deg);
+}
+
+.caddieStructuredIntelPre {
+  margin: 0 0 4px;
+  padding: 10px;
+  font-size: 11px;
+  line-height: 1.35;
+  overflow: auto;
+  max-height: min(38vh, 320px);
+  background: rgba(11, 18, 32, 0.045);
+  border-radius: 10px;
+  border: 1px solid rgba(11, 18, 32, 0.08);
+  white-space: pre-wrap;
+  word-break: break-word;
+}

@@ -63,6 +63,7 @@ class CaddieAdviceIn(BaseModel):
 
 class CaddieAdviceOut(BaseModel):
     assistant: str
+    structured_shot_intel: dict[str, Any]
 
 
 class CaddieTtsIn(BaseModel):
@@ -209,7 +210,7 @@ def caddie_advice(
     club_pick = pick_club_for_plays_like_yards(bag, plays_like)
     eff_shape = shot_shape_for_club(str(club_pick["club"]), shot_shapes_norm)
 
-    ctx = build_caddie_advice_context(
+    ctx, structured_intel = build_caddie_advice_context(
         course_id=body.course_id,
         course_name=course_nm,
         hole=hole,
@@ -260,7 +261,7 @@ def caddie_advice(
             detail=f"Caddie unavailable: {e}",
         ) from e
 
-    return CaddieAdviceOut(assistant=assistant)
+    return CaddieAdviceOut(assistant=assistant, structured_shot_intel=structured_intel)
 
 
 @router.post("/tts")
