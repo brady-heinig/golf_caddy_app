@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Annotated
 
 import psycopg
@@ -30,14 +31,20 @@ class RoundUpdateIn(BaseModel):
     notes: str | None = Field(default=None, max_length=2000)
 
 
+def _iso(v) -> str:
+    if isinstance(v, datetime):
+        return v.isoformat()
+    return str(v)
+
+
 def _row_to_round(row) -> RoundOut:
     return RoundOut(
         id=int(row["id"]),
         course_id=row["course_id"],
         status=row["status"],
         current_hole=int(row["current_hole"]),
-        started_at=row["started_at"],
-        updated_at=row["updated_at"],
+        started_at=_iso(row["started_at"]),
+        updated_at=_iso(row["updated_at"]),
         notes=row["notes"],
     )
 
