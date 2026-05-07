@@ -283,6 +283,13 @@ export function CaddieApp() {
     return [{ id, name: "You", scores: emptyScores18() }];
   });
   const [showHolePicker, setShowHolePicker] = useState<boolean>(false);
+  const [showCaddieAdvice, setShowCaddieAdvice] = useState(false);
+  const [caddieLie, setCaddieLie] = useState("fairway");
+  const [caddieShape, setCaddieShape] = useState("straight");
+  const [caddieMessage, setCaddieMessage] = useState("");
+  const [caddieLoading, setCaddieLoading] = useState(false);
+  const [caddieErr, setCaddieErr] = useState<string | null>(null);
+  const [caddieReply, setCaddieReply] = useState<string | null>(null);
   const [scoreEditCell, setScoreEditCell] = useState<{ playerId: string; hole: number } | null>(null);
   const [activeCardPlayerId, setActiveCardPlayerId] = useState<string | null>(null);
   const [wxOverride, setWxOverride] = useState<any | null>(null);
@@ -422,141 +429,102 @@ export function CaddieApp() {
   const windCard = w?.wind_dir_card ?? "";
   const weatherOk = Boolean(w && !w.error && windMph != null && windFromDeg != null);
 
-  // Client-side weather fallback — deps must NOT include wxOverride or we refetch in a loop every time
-  // setWxOverride runs (backend weather errors are common).
+  // Client-side fallback: if backend can't reach Open‑Meteo, compute weather + plays-like adjustments here.
   useEffect(() => {
     if (!hole?.hole) return;
-
-    const backendWx = hole?.weather;
-    const backendOk = Boolean(
-      backendWx && !backendWx.error && backendWx.wind_mph != null && backendWx.wind_dir_deg != null,
-    );
-    if (backendOk) {
-      setWxOverride(null);
-      return;
-    }
-
-    const tee = hole.hole.tee as LL;
-    const player = effectivePos ?? tee;
-    let cancelled = false;
-    const ac = new AbortController();
-
-    (async () => {
-      try {
-        const q = new URLSearchParams({
-          latitude: String(player.lat),
-          longitude: String(player.lon),
-          current: "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation,weather_code",
-          wind_speed_unit: "mph",
-          temperature_unit: "fahrenheit",
-          forecast_days: "1",
-        });
-        const r = await fetch(`https://api.open-meteo.com/v1/forecast?${q.toString()}`, {
-          signal: ac.signal,
-          cache: "no-store",
-        });
-        if (!r.ok) throw new Error(`wx ${r.status}`);
-        const j = await r.json();
-        const cur = j?.current ?? {};
-        const wd = cur?.wind_direction_10m;
-        const ws = cur?.wind_speed_10m;
-        const wx = {
-          temp_f: cur?.temperature_2m ?? null,
-          humidity_pct: cur?.relative_humidity_2m ?? null,
-          wind_mph: typeof ws === "number" ? ws : ws != null ? Number(ws) : null,
-          wind_dir_deg: typeof wd === "number" ? wd : wd != null ? Number(wd) : null,
-          wind_dir_card: "",
-        };
-        if (!cancelled) setWxOverride(wx);
-      } catch {
-        /* keep backend / empty */
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      ac.abort();
-    };
-  }, [hole?.hole?.number, hole?.weather?.error, hole?.weather?.fetched_at, effectivePos?.lat, effectivePos?.lon]);
-
-  // Metrics fallback if the hole JSON lacks computed metrics (runs when wxOverride arrives from above).
-  useEffect(() => {
-    if (!hole?.hole) return;
-
     const tee = hole.hole.tee as LL;
     const gc = hole.hole.green_center as LL;
     const player = effectivePos ?? tee;
-    const m = hole?.metrics;
-    const backendHasMetrics = Boolean(
-      m &&
-        typeof m.distance_yd === "number" &&
-        Number.isFinite(m.distance_yd) &&
-        (typeof m.elev_change_yd === "number") &&
-        Number.isFinite(m.elev_change_yd),
-    );
-
-    if (backendHasMetrics) {
-      setMetricsOverride(null);
-      return;
-    }
 
     const backendWx = hole?.weather;
+    const backendOk = Boolean(backendWx && !backendWx.error && backendWx.wind_mph != null && backendWx.wind_dir_deg != null);
+    const backendHasMetrics = Boolean(hole?.metrics && hole.metrics.distance_yd != null && hole.metrics.elev_change_yd != null);
+
     let cancelled = false;
     const ac = new AbortController();
 
-    (async () => {
+    async function fetchWxAndMaybeMetrics() {
       try {
-        const q2 = new URLSearchParams({
-          latitude: `${player.lat},${gc.lat}`,
-          longitude: `${player.lon},${gc.lon}`,
-        });
-        const r2 = await fetch(`https://api.open-meteo.com/v1/elevation?${q2.toString()}`, {
-          signal: ac.signal,
-          cache: "no-store",
-        });
-        if (!r2.ok) throw new Error(`elev ${r2.status}`);
-        const j2 = await r2.json();
-        const arr = Array.isArray(j2?.elevation) ? j2.elevation : [];
-        const elevPlayerM = Number(arr?.[0] ?? 0);
-        const elevGreenM = Number(arr?.[1] ?? 0);
-        const elevChangeYd = ((elevGreenM - elevPlayerM) * 3.28084) / 3.0;
-        const distYd = haversineYards(player, gc);
-        const baseline = distYd + elevChangeYd;
-
-        const wx = (wxOverride ?? backendWx) as { error?: unknown; wind_mph?: unknown; wind_dir_deg?: unknown };
-        let windAdj = 0;
-        if (wx && !wx.error && wx.wind_mph != null && wx.wind_dir_deg != null) {
-          const brg = bearingDegrees(player.lat, player.lon, gc.lat, gc.lon);
-          const { along } = windShotAlongCross(Number(wx.wind_mph), Number(wx.wind_dir_deg), brg);
-          const { add, sub } = windYardHeadTailYds(along, baseline);
-          windAdj = add - sub;
+        // Weather fallback (Open‑Meteo forecast current)
+        if (!backendOk) {
+          const q = new URLSearchParams({
+            latitude: String(player.lat),
+            longitude: String(player.lon),
+            current: "temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,precipitation,weather_code",
+            wind_speed_unit: "mph",
+            temperature_unit: "fahrenheit",
+            forecast_days: "1",
+          });
+          const r = await fetch(`https://api.open-meteo.com/v1/forecast?${q.toString()}`, {
+            signal: ac.signal,
+            cache: "no-store",
+          });
+          if (!r.ok) throw new Error(`wx ${r.status}`);
+          const j = await r.json();
+          const cur = j?.current ?? {};
+          const wd = cur?.wind_direction_10m;
+          const ws = cur?.wind_speed_10m;
+          const wx = {
+            temp_f: cur?.temperature_2m ?? null,
+            humidity_pct: cur?.relative_humidity_2m ?? null,
+            wind_mph: typeof ws === "number" ? ws : ws != null ? Number(ws) : null,
+            wind_dir_deg: typeof wd === "number" ? wd : wd != null ? Number(wd) : null,
+            wind_dir_card: "",
+          };
+          if (!cancelled) setWxOverride(wx);
+        } else {
+          if (!cancelled) setWxOverride(null);
         }
-        const playsLike = baseline + windAdj;
-        const out = {
-          distance_yd: Math.round(distYd),
-          elev_change_yd: Math.round(elevChangeYd * 10) / 10,
-          wind_adjust_yd: Math.round(windAdj * 10) / 10,
-          plays_like_yd: Math.round(playsLike),
-        };
-        if (!cancelled) setMetricsOverride(out);
-      } catch {
-        /* keep backend values */
-      }
-    })();
 
+        // Metrics fallback (elevation + wind adjustment) if backend metrics missing.
+        if (!backendHasMetrics) {
+          const q2 = new URLSearchParams({
+            latitude: `${player.lat},${gc.lat}`,
+            longitude: `${player.lon},${gc.lon}`,
+          });
+          const r2 = await fetch(`https://api.open-meteo.com/v1/elevation?${q2.toString()}`, {
+            signal: ac.signal,
+            cache: "no-store",
+          });
+          if (!r2.ok) throw new Error(`elev ${r2.status}`);
+          const j2 = await r2.json();
+          const arr = Array.isArray(j2?.elevation) ? j2.elevation : [];
+          const elevPlayerM = Number(arr?.[0] ?? 0);
+          const elevGreenM = Number(arr?.[1] ?? 0);
+          const elevChangeYd = ((elevGreenM - elevPlayerM) * 3.28084) / 3.0;
+          const distYd = haversineYards(player, gc);
+          const baseline = distYd + elevChangeYd;
+
+          const wx = (wxOverride ?? backendWx) as any;
+          let windAdj = 0;
+          if (wx && !wx.error && wx.wind_mph != null && wx.wind_dir_deg != null) {
+            const brg = bearingDegrees(player.lat, player.lon, gc.lat, gc.lon);
+            const { along } = windShotAlongCross(Number(wx.wind_mph), Number(wx.wind_dir_deg), brg);
+            const { add, sub } = windYardHeadTailYds(along, baseline);
+            windAdj = add - sub;
+          }
+          const playsLike = baseline + windAdj;
+          const out = {
+            distance_yd: Math.round(distYd),
+            elev_change_yd: Math.round(elevChangeYd * 10) / 10,
+            wind_adjust_yd: Math.round(windAdj * 10) / 10,
+            plays_like_yd: Math.round(playsLike),
+          };
+          if (!cancelled) setMetricsOverride(out);
+        } else {
+          if (!cancelled) setMetricsOverride(null);
+        }
+      } catch {
+        // If the browser can't fetch either, keep backend values (or lack thereof).
+      }
+    }
+
+    fetchWxAndMaybeMetrics();
     return () => {
       cancelled = true;
       ac.abort();
     };
-  }, [
-    hole?.hole?.number,
-    hole?.metrics?.distance_yd,
-    hole?.metrics?.elev_change_yd,
-    effectivePos?.lat,
-    effectivePos?.lon,
-    wxOverride,
-    hole?.weather,
-  ]);
+  }, [hole?.hole?.number, hole?.weather?.fetched_at, effectivePos?.lat, effectivePos?.lon, wxOverride]);
 
   const primaryScores = scorecardPlayers[0]?.scores ?? [];
   const scoreStr = useMemo(() => {
@@ -639,9 +607,64 @@ export function CaddieApp() {
   }, [showScore]);
 
   const talkWithCaddie = () => {
-    // Hosted app uses round-based chat (Supabase-backed).
-    // Send them to Past rounds where they can start/resume.
-    window.location.href = "/rounds";
+    setCaddieErr(null);
+    setCaddieReply(null);
+    setShowCaddieAdvice(true);
+  };
+
+  const fetchCaddieAdvice = async () => {
+    const pos = effectivePos;
+    if (!pos) {
+      setCaddieErr(
+        roundMode === "live" && liveGps == null
+          ? "Still acquiring GPS. Wait a few seconds or check location permissions."
+          : roundMode === "sim"
+            ? "Sim position not ready. Try again after the map loads."
+            : "Position unavailable.",
+      );
+      return;
+    }
+    setCaddieLoading(true);
+    setCaddieErr(null);
+    try {
+      const bend = bendMapRef.current;
+      const body: Record<string, unknown> = {
+        course_id: courseId,
+        hole_number: holeNum,
+        player_lat: pos.lat,
+        player_lon: pos.lon,
+        lie: caddieLie,
+        shot_shape: caddieShape,
+      };
+      if (bend != null && Number.isFinite(bend.lat) && Number.isFinite(bend.lon)) {
+        body.bend_lat = bend.lat;
+        body.bend_lon = bend.lon;
+      }
+      const q = caddieMessage.trim();
+      if (q) body.message = q;
+      const res = await fetch("/api/caddie/advice", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data: unknown = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        const detail = (data as { detail?: unknown }).detail;
+        const msg =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? (detail as { msg?: string }[]).map((d) => d?.msg ?? JSON.stringify(d)).join("; ")
+              : res.statusText;
+        throw new Error(msg || "Request failed");
+      }
+      setCaddieReply(String((data as { assistant?: string }).assistant ?? ""));
+    } catch (e) {
+      setCaddieErr(e instanceof Error ? e.message : String(e));
+      setCaddieReply(null);
+    } finally {
+      setCaddieLoading(false);
+    }
   };
 
   // Create map after mode chosen.
@@ -1319,6 +1342,89 @@ export function CaddieApp() {
                   );
                 })}
               </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showCaddieAdvice ? (
+        <div
+          className="modalOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Talk with caddie"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowCaddieAdvice(false);
+          }}
+        >
+          <div className="modalCard" style={{ maxHeight: "78dvh", width: "min(100%, 400px)" }}>
+            <div className="modalHeader">
+              <div>
+                <div className="modalTitle">Talk with caddie</div>
+                <div className="modalSub">
+                  Hole {holeNum} · {course?.name ?? courseId}
+                </div>
+              </div>
+              <button type="button" className="btn modalClose" onClick={() => setShowCaddieAdvice(false)}>
+                Close
+              </button>
+            </div>
+            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
+              <div style={{ fontSize: 13, color: "rgba(11,18,32,0.7)" }}>
+                Uses your position, map bend (landing), distances, wind/elevation, hazards near the landing zone, green
+                geometry, and bag yardages from Settings.
+              </div>
+              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
+                <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
+                  Lie
+                  <select
+                    value={caddieLie}
+                    onChange={(e) => setCaddieLie(e.target.value)}
+                    aria-label="Lie"
+                    style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid rgba(11,18,32,0.2)" }}
+                  >
+                    <option value="fairway">Fairway</option>
+                    <option value="rough">Rough</option>
+                    <option value="bunker">Bunker</option>
+                    <option value="tee">Tee</option>
+                    <option value="trees">Trees / trouble</option>
+                  </select>
+                </label>
+                <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
+                  Shape
+                  <select
+                    value={caddieShape}
+                    onChange={(e) => setCaddieShape(e.target.value)}
+                    aria-label="Shot shape"
+                    style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid rgba(11,18,32,0.2)" }}
+                  >
+                    <option value="straight">Straight</option>
+                    <option value="draw">Draw</option>
+                    <option value="fade">Fade</option>
+                  </select>
+                </label>
+              </div>
+              <textarea
+                value={caddieMessage}
+                onChange={(e) => setCaddieMessage(e.target.value)}
+                placeholder="Optional question (e.g. between clubs, scared of the pin…)"
+                rows={2}
+                style={{ width: "100%", resize: "vertical", minHeight: 52 }}
+              />
+              <button
+                type="button"
+                className="btn btnPrimary"
+                onClick={() => void fetchCaddieAdvice()}
+                disabled={caddieLoading}
+              >
+                {caddieLoading ? "Thinking…" : "Get advice"}
+              </button>
+              {caddieErr ? (
+                <div style={{ fontSize: 13, color: "#b91c1c", whiteSpace: "pre-wrap" }}>{caddieErr}</div>
+              ) : null}
+              {caddieReply ? (
+                <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap", marginTop: 4 }}>{caddieReply}</div>
+              ) : null}
             </div>
           </div>
         </div>
