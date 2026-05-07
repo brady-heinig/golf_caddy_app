@@ -35,7 +35,11 @@ def get_settings(
         (int(user["id"]),),
     ).fetchone()
     if not row:
-        return UserSettingsOut(handicap_index=None, bag=None, shot_shapes=normalize_shot_shapes(None))
+        return UserSettingsOut(
+            handicap_index=None,
+            bag=None,
+            shot_shapes=normalize_shot_shapes(None),
+        )
     bag = json.loads(row["bag_json"]) if row["bag_json"] else None
     shot_shapes = json.loads(row["shot_shapes_json"]) if row["shot_shapes_json"] else None
     return UserSettingsOut(

@@ -8,12 +8,29 @@ import requests
 ELEVENLABS_TTS_URL = "https://api.elevenlabs.io/v1/text-to-speech/{voice_id}"
 
 
+def _clamp_speed(v: float) -> float:
+    return max(0.5, min(2.0, float(v)))
+
+
+def _effective_speech_speed(explicit: float | None) -> float | None:
+    if explicit is not None:
+        return _clamp_speed(explicit)
+    raw = os.environ.get("ELEVENLABS_SPEECH_SPEED")
+    if raw is None or not str(raw).strip():
+        return None
+    try:
+        return _clamp_speed(float(str(raw).strip()))
+    except ValueError:
+        return None
+
+
 def synthesize_speech_mp3(
     text: str,
     *,
     api_key: str,
     voice_id: str,
     model_id: str | None = None,
+    speech_speed: float | None = None,
     timeout_s: int = 120,
 ) -> bytes:
     """Call ElevenLabs text-to-speech; returns raw MP3 bytes."""
@@ -21,8 +38,11 @@ def synthesize_speech_mp3(
     url = ELEVENLABS_TTS_URL.format(voice_id=voice_id)
     payload: dict[str, Any] = {
         "text": text,
-        "model_id": mid,
+        "model_id": mid.strip(),
     }
+    spd = _effective_speech_speed(speech_speed)
+    if spd is not None:
+        payload["voice_settings"] = {"speed": spd}
 
     r = requests.post(
         url,

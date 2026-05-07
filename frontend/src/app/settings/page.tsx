@@ -6,7 +6,11 @@ import { apiFetch } from "@/lib/api";
 
 type Bag = Record<string, number>;
 type ShotShapes = { driver: string; woods: string; irons: string };
-type Settings = { handicap_index: number | null; bag: Bag | null; shot_shapes: ShotShapes | null };
+type Settings = {
+  handicap_index: number | null;
+  bag: Bag | null;
+  shot_shapes: ShotShapes | null;
+};
 
 const DEFAULT_CLUBS = [
   "Driver",

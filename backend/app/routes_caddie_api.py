@@ -271,7 +271,7 @@ def caddie_text_to_speech(
     body: CaddieTtsIn,
     _user: Annotated[dict, Depends(get_current_user)],
 ) -> Response:
-    """Convert caddie (or any) text to speech via ElevenLabs. API key is server-side only."""
+    """Convert text to speech via ElevenLabs. API key, model, speed, default voice: environment variables on Render."""
     api_key = os.environ.get("ELEVENLABS_API_KEY")
     if not api_key:
         raise HTTPException(
@@ -284,18 +284,33 @@ def caddie_text_to_speech(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Set ELEVENLABS_VOICE_ID on the server (or pass voice_id). Pick a voice ID from elevenlabs.io → Voices.",
         )
+
     try:
         audio = synthesize_speech_mp3(
             body.text.strip(),
             api_key=api_key,
             voice_id=voice,
-            model_id=os.environ.get("ELEVENLABS_MODEL_ID"),
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
-            detail=f"ElevenLabs error: {e}",
+            detail=_friendly_tts_error(str(e)),
         ) from e
 
     return Response(content=audio, media_type="audio/mpeg")
+
+
+def _friendly_tts_error(message: str) -> str:
+    m = (message or "").lower()
+    if "unusual activity" in m or ("free tier" in m and "disabled" in m):
+        return (
+            "ElevenLabs refused this request (their anti-abuse checks often flag VPNs, datacenter IPs, or free-tier limits). "
+            "Try: turn off VPN, use home/mobile data, upgrade to a paid ElevenLabs plan, or contact their support. "
+            "In the app you can use ‘Device voice’ for free browser speech without ElevenLabs."
+        )
+    if "401" in message or "unauthorized" in m:
+        return "ElevenLabs API key rejected. Check ELEVENLABS_API_KEY on the server."
+    if len(message) > 500:
+        return message[:500] + "…"
+    return message
 

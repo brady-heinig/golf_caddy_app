@@ -618,6 +618,9 @@ export function CaddieApp() {
       ttsObjectUrlRef.current = null;
     }
     setTtsErr(null);
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
   }, [showCaddieAdvice]);
 
   const playCaddieTts = useCallback(async () => {
@@ -667,6 +670,24 @@ export function CaddieApp() {
     } finally {
       setTtsLoading(false);
     }
+  }, [caddieReply]);
+
+  /** Free fallback: browser speech synthesis (quality varies by OS). */
+  const playDeviceVoice = useCallback(() => {
+    const raw = caddieReply?.trim();
+    if (!raw || typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const text = raw
+      .replace(/\r/g, "")
+      .replace(/\n-{3,}\n/g, ". ")
+      .replace(/\n+/g, ". ")
+      .replace(/\s+/g, " ")
+      .trim();
+    if (!text) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-US";
+    u.rate = 1;
+    window.speechSynthesis.speak(u);
   }, [caddieReply]);
 
   const fetchCaddieAdvice = useCallback(async () => {
@@ -1456,11 +1477,17 @@ export function CaddieApp() {
                   <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{caddieReply}</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                     <button type="button" className="btn btnPrimary" onClick={() => void playCaddieTts()} disabled={ttsLoading}>
-                      {ttsLoading ? "Loading voice…" : "Listen"}
+                      {ttsLoading ? "Loading voice…" : "Listen (ElevenLabs)"}
+                    </button>
+                    <button type="button" className="btn" onClick={() => playDeviceVoice()} title="Uses your browser; no API key">
+                      Device voice
                     </button>
                     <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()} disabled={caddieLoading}>
                       Refresh advice
                     </button>
+                  </div>
+                  <div style={{ fontSize: 12, color: "rgba(11,18,32,0.55)" }}>
+                    If ElevenLabs shows a VPN or free-tier block, try Device voice or upgrade your ElevenLabs plan.
                   </div>
                   {ttsErr ? <div style={{ fontSize: 13, color: "#b91c1c" }}>{ttsErr}</div> : null}
                 </div>
