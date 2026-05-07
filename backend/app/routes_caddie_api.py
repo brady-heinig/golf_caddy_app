@@ -10,9 +10,17 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from .caddie_advice_context import build_caddie_advice_context
+from .caddie_lie_detect import classify_lie_from_blue_dot
 from .caddie_shot_intel import resolve_intended_landing
 from .deps import get_conn, get_current_user
+from .legacy import course_data as course_data_mod
+from .legacy import course_features
 from .routes_caddie_compat import get_course, get_hole, get_plays_like_path, list_courses
+from .bag_selection import (
+    normalize_shot_shapes,
+    pick_club_for_plays_like_yards,
+    shot_shape_for_club,
+)
 
 router = APIRouter(prefix="/caddie", tags=["caddie"])
 
@@ -20,6 +28,9 @@ CADDIE_ADVICE_SYSTEM = (
     "You are an experienced on-course golf caddie. The user message includes STRUCTURED_SHOT_INTEL JSON: "
     "player vs tee, shot_type, intended landing, bunkers/trouble along the corridor to that landing, "
     "fairway width at landing, and a next-shot preview. Treat that JSON as ground truth from the map/geometry.\n"
+    "STRUCTURED_SHOT_INTEL includes lie inferred from the blue-dot vs OSM tee/fairway/bunker/green polygons "
+    "and shot_shape_from_settings (draw/fade/straight per driver vs woods-hybrid vs irons from Settings, "
+    "matched to the recommended club category).\n"
     "If STRUCTURED_SHOT_INTEL conflicts with narrative text, trust the JSON.\n"
     "For a tee shot on par 4/5: say drive vs fairway-wood vs 3W if relevant, which bunkers/water to respect, "
     "whether the fairway looks wide enough at the modeled landing, and one sentence on what the follow-up shot "
@@ -48,8 +59,6 @@ class CaddieAdviceIn(BaseModel):
     player_lon: float = Field(ge=-180, le=180)
     bend_lat: float | None = Field(default=None)
     bend_lon: float | None = Field(default=None)
-    lie: str = Field(default="fairway", max_length=48)
-    shot_shape: str = Field(default="straight", max_length=24)
     message: str | None = Field(default=None, max_length=2000)
 
 
@@ -59,14 +68,15 @@ class CaddieAdviceOut(BaseModel):
 
 def _get_user_settings(conn: psycopg.Connection, user_id: int) -> dict[str, Any]:
     row = conn.execute(
-        "SELECT handicap_index, bag_json FROM user_settings WHERE user_id = %s",
+        "SELECT handicap_index, bag_json, shot_shapes_json FROM user_settings WHERE user_id = %s",
         (user_id,),
     ).fetchone()
     if not row:
-        return {"handicap_index": 15.0, "bag": {}}
+        return {"handicap_index": 15.0, "bag": {}, "shot_shapes": {}}
     bag = json.loads(row["bag_json"]) if row["bag_json"] else {}
     h = row["handicap_index"] if row["handicap_index"] is not None else 15.0
-    return {"handicap_index": float(h), "bag": bag}
+    shot_shapes = json.loads(row["shot_shapes_json"]) if row["shot_shapes_json"] else {}
+    return {"handicap_index": float(h), "bag": bag, "shot_shapes": shot_shapes}
 
 
 def _validate_bend(body: CaddieAdviceIn) -> None:
@@ -139,6 +149,27 @@ def caddie_advice(
     s = _get_user_settings(conn, uid)
     hcp = float(s["handicap_index"])
     bag = dict(s["bag"] or {})
+    shot_shapes_store = s.get("shot_shapes") or {}
+    shot_shapes_norm = normalize_shot_shapes(shot_shapes_store if isinstance(shot_shapes_store, dict) else {})
+
+    course = course_data_mod.COURSES.get(body.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Unknown course_id")
+    holes = course.get("holes") or []
+    if body.hole_number < 1 or body.hole_number > len(holes):
+        raise HTTPException(status_code=404, detail="Invalid hole_number")
+    hole_dict = holes[body.hole_number - 1]
+    try:
+        features_for_lie = course_features.load_hole_feature_collection(body.course_id, body.hole_number)
+    except Exception:
+        features_for_lie = {"type": "FeatureCollection", "features": []}
+
+    lie_auto, lie_meta = classify_lie_from_blue_dot(
+        body.player_lat,
+        body.player_lon,
+        hole_dict,
+        features_for_lie,
+    )
 
     payload = get_hole(
         course_id=body.course_id,
@@ -146,7 +177,7 @@ def caddie_advice(
         player_lat=body.player_lat,
         player_lon=body.player_lon,
         handicap=hcp,
-        lie=body.lie,
+        lie=lie_auto,
     )
 
     hole = payload["hole"]
@@ -162,13 +193,18 @@ def caddie_advice(
         body.bend_lon,
         bag,
         hole,
-        body.lie,
+        lie_auto,
         dist_pin,
     )
 
     wx = payload["weather"]
     features = payload["features"]
     course_nm = (payload.get("course") or {}).get("name")
+
+    plays_like = float(metrics.get("plays_like_yd") or 0.0)
+    club_pick = pick_club_for_plays_like_yards(bag, plays_like)
+    eff_shape = shot_shape_for_club(str(club_pick["club"]), shot_shapes_norm)
+
     ctx = build_caddie_advice_context(
         course_id=body.course_id,
         course_name=course_nm,
@@ -181,10 +217,12 @@ def caddie_advice(
         landing_lat=llat,
         landing_lon=llon,
         landing_meta=lmeta,
-        lie=body.lie.lower(),
-        shot_shape=body.shot_shape.lower(),
+        lie=lie_auto.lower(),
+        shot_shape=eff_shape,
         handicap=hcp,
         bag=bag,
+        shot_shapes=shot_shapes_norm,
+        lie_detect_meta=lie_meta,
     )
 
     user_line = (body.message or "").strip()

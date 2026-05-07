@@ -3,7 +3,7 @@
 // Port of `caddie/frontend/src/App.tsx` so we can host the same experience
 // inside the Vercel-ready Next.js app.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map, Marker } from "maplibre-gl";
 import * as turf from "@turf/turf";
 
@@ -284,9 +284,6 @@ export function CaddieApp() {
   });
   const [showHolePicker, setShowHolePicker] = useState<boolean>(false);
   const [showCaddieAdvice, setShowCaddieAdvice] = useState(false);
-  const [caddieLie, setCaddieLie] = useState("tee");
-  const [caddieShape, setCaddieShape] = useState("straight");
-  const [caddieMessage, setCaddieMessage] = useState("");
   const [caddieLoading, setCaddieLoading] = useState(false);
   const [caddieErr, setCaddieErr] = useState<string | null>(null);
   const [caddieReply, setCaddieReply] = useState<string | null>(null);
@@ -606,13 +603,7 @@ export function CaddieApp() {
     if (!showScore) setScoreEditCell(null);
   }, [showScore]);
 
-  const talkWithCaddie = () => {
-    setCaddieErr(null);
-    setCaddieReply(null);
-    setShowCaddieAdvice(true);
-  };
-
-  const fetchCaddieAdvice = async () => {
+  const fetchCaddieAdvice = useCallback(async () => {
     const pos = effectivePos;
     if (!pos) {
       setCaddieErr(
@@ -633,15 +624,11 @@ export function CaddieApp() {
         hole_number: holeNum,
         player_lat: pos.lat,
         player_lon: pos.lon,
-        lie: caddieLie,
-        shot_shape: caddieShape,
       };
       if (bend != null && Number.isFinite(bend.lat) && Number.isFinite(bend.lon)) {
         body.bend_lat = bend.lat;
         body.bend_lon = bend.lon;
       }
-      const q = caddieMessage.trim();
-      if (q) body.message = q;
       const res = await fetch("/api/caddie/advice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -665,6 +652,17 @@ export function CaddieApp() {
     } finally {
       setCaddieLoading(false);
     }
+  }, [courseId, holeNum, effectivePos, roundMode, liveGps]);
+
+  useEffect(() => {
+    if (!showCaddieAdvice) return;
+    void fetchCaddieAdvice();
+  }, [showCaddieAdvice, fetchCaddieAdvice]);
+
+  const talkWithCaddie = () => {
+    setCaddieErr(null);
+    setCaddieReply(null);
+    setShowCaddieAdvice(true);
   };
 
   // Create map after mode chosen.
@@ -1371,59 +1369,28 @@ export function CaddieApp() {
             </div>
             <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
               <div style={{ fontSize: 13, color: "rgba(11,18,32,0.7)" }}>
-                Uses the blue-dot position, the white map target (landing), hole geometry (fairways/bunkers from map data),
-                wind and elevation, and your bag from Settings. First shot from the tee: set Lie to Tee.
+                Lie is read from where your blue dot sits (tee, fairway, rough, bunker, or fringe). Shot shape uses
+                your driver / woods-hybrid / irons preferences from Settings. Adjust the white target on the map to
+                change the planned landing.
               </div>
-              <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
-                <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
-                  Lie
-                  <select
-                    value={caddieLie}
-                    onChange={(e) => setCaddieLie(e.target.value)}
-                    aria-label="Lie"
-                    style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid rgba(11,18,32,0.2)" }}
-                  >
-                    <option value="tee">Tee</option>
-                    <option value="fairway">Fairway</option>
-                    <option value="rough">Rough</option>
-                    <option value="bunker">Bunker</option>
-                    <option value="trees">Trees / trouble</option>
-                  </select>
-                </label>
-                <label style={{ display: "flex", gap: 6, alignItems: "center", fontSize: 14 }}>
-                  Shape
-                  <select
-                    value={caddieShape}
-                    onChange={(e) => setCaddieShape(e.target.value)}
-                    aria-label="Shot shape"
-                    style={{ padding: "6px 8px", borderRadius: 8, border: "1px solid rgba(11,18,32,0.2)" }}
-                  >
-                    <option value="straight">Straight</option>
-                    <option value="draw">Draw</option>
-                    <option value="fade">Fade</option>
-                  </select>
-                </label>
-              </div>
-              <textarea
-                value={caddieMessage}
-                onChange={(e) => setCaddieMessage(e.target.value)}
-                placeholder="Optional question (e.g. between clubs, scared of the pin…)"
-                rows={2}
-                style={{ width: "100%", resize: "vertical", minHeight: 52 }}
-              />
-              <button
-                type="button"
-                className="btn btnPrimary"
-                onClick={() => void fetchCaddieAdvice()}
-                disabled={caddieLoading}
-              >
-                {caddieLoading ? "Thinking…" : "Get advice"}
-              </button>
-              {caddieErr ? (
-                <div style={{ fontSize: 13, color: "#b91c1c", whiteSpace: "pre-wrap" }}>{caddieErr}</div>
+              {caddieLoading ? (
+                <div style={{ fontSize: 14, padding: "12px 0" }}>Getting advice…</div>
+              ) : null}
+              {!caddieLoading && caddieErr ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 13, color: "#b91c1c", whiteSpace: "pre-wrap" }}>{caddieErr}</div>
+                  <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()}>
+                    Try again
+                  </button>
+                </div>
               ) : null}
               {caddieReply ? (
-                <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap", marginTop: 4 }}>{caddieReply}</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{caddieReply}</div>
+                  <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()} disabled={caddieLoading}>
+                    Refresh advice
+                  </button>
+                </div>
               ) : null}
             </div>
           </div>

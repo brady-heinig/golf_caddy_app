@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 
@@ -61,3 +62,48 @@ def pick_club_for_plays_like_yards(bag: dict[str, Any], plays_like_yds: float) -
 
 def club_name_for_plays_like_yards(bag: dict[str, Any], plays_like_yds: float) -> str:
     return str(pick_club_for_plays_like_yards(bag, plays_like_yds)["club"])
+
+
+def club_shape_category(club_name: str) -> str:
+    """Bucket for shot-shape settings: driver | woods | irons."""
+    n = (club_name or "").strip().lower()
+    if not n or n == "unknown":
+        return "irons"
+    if "driver" in n or n in ("d", "1w", "1-wood"):
+        return "driver"
+    if (
+        "wood" in n
+        or re.search(r"\b[1-9]\s*w\b", n)
+        or re.search(r"\b[1-9]w\b", n)
+        or "hybrid" in n
+        or re.search(r"\b[1-9]\s*h\b", n)
+        or re.search(r"\b[1-9]h\b", n)
+        or "utility" in n
+        or "ut" == n
+        or "driving iron" in n
+        or "di " in n
+    ):
+        return "woods"
+    return "irons"
+
+
+_VALID_SHAPES = frozenset({"straight", "draw", "fade"})
+
+
+def normalize_shot_shapes(raw: dict[str, Any] | None) -> dict[str, str]:
+    """Defaults: straight for each category."""
+    base = {"driver": "straight", "woods": "straight", "irons": "straight"}
+    if not raw or not isinstance(raw, dict):
+        return dict(base)
+    out = dict(base)
+    for k in ("driver", "woods", "irons"):
+        v = raw.get(k)
+        if isinstance(v, str) and v.lower() in _VALID_SHAPES:
+            out[k] = v.lower()
+    return out
+
+
+def shot_shape_for_club(club_name: str, shot_shapes: dict[str, Any] | None) -> str:
+    cat = club_shape_category(club_name)
+    norm = normalize_shot_shapes(shot_shapes if isinstance(shot_shapes, dict) else None)
+    return norm.get(cat, "straight")

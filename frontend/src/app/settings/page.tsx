@@ -5,7 +5,8 @@ import { useEffect, useState } from "react";
 import { apiFetch } from "@/lib/api";
 
 type Bag = Record<string, number>;
-type Settings = { handicap_index: number | null; bag: Bag | null };
+type ShotShapes = { driver: string; woods: string; irons: string };
+type Settings = { handicap_index: number | null; bag: Bag | null; shot_shapes: ShotShapes | null };
 
 const DEFAULT_CLUBS = [
   "Driver",
@@ -21,7 +22,15 @@ const DEFAULT_CLUBS = [
   "PW",
   "GW",
   "SW",
-  "LW"
+  "LW",
+];
+
+const DEFAULT_SHAPES: ShotShapes = { driver: "straight", woods: "straight", irons: "straight" };
+
+const SHAPE_OPTIONS = [
+  { value: "straight", label: "Straight" },
+  { value: "draw", label: "Draw" },
+  { value: "fade", label: "Fade" },
 ];
 
 export default function SettingsPage() {
@@ -30,6 +39,7 @@ export default function SettingsPage() {
   const [saving, setSaving] = useState(false);
   const [handicap, setHandicap] = useState<number>(15);
   const [bag, setBag] = useState<Bag>(() => Object.fromEntries(DEFAULT_CLUBS.map((c) => [c, 0])));
+  const [shotShapes, setShotShapes] = useState<ShotShapes>({ ...DEFAULT_SHAPES });
 
   useEffect(() => {
     (async () => {
@@ -41,8 +51,11 @@ export default function SettingsPage() {
           const merged: Bag = { ...Object.fromEntries(DEFAULT_CLUBS.map((c) => [c, 0])), ...s.bag };
           setBag(merged);
         }
-      } catch (e: any) {
-        setError(e?.message || "Failed to load settings");
+        if (s.shot_shapes && typeof s.shot_shapes === "object") {
+          setShotShapes({ ...DEFAULT_SHAPES, ...s.shot_shapes });
+        }
+      } catch (e: unknown) {
+        setError(e instanceof Error ? e.message : "Failed to load settings");
       } finally {
         setLoading(false);
       }
@@ -60,10 +73,14 @@ export default function SettingsPage() {
       }
       await apiFetch("/api/me/settings", {
         method: "PUT",
-        body: JSON.stringify({ handicap_index: handicap, bag: cleanBag })
+        body: JSON.stringify({
+          handicap_index: handicap,
+          bag: cleanBag,
+          shot_shapes: shotShapes,
+        }),
       });
-    } catch (e: any) {
-      setError(e?.message || "Save failed");
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : "Save failed");
     } finally {
       setSaving(false);
     }
@@ -89,7 +106,57 @@ export default function SettingsPage() {
         </label>
       </section>
 
-      <h2 style={{ marginTop: 0 }}>My bag</h2>
+      <h2 style={{ marginTop: 24 }}>Typical shot shape</h2>
+      <p style={{ marginTop: 6, opacity: 0.8 }}>
+        Used when you talk to the caddie: the app pairs your usual driver, fairway wood / hybrid, or iron bias with
+        the club it recommends from your bag.
+      </p>
+      <div style={{ display: "grid", gap: 14, maxWidth: 420 }}>
+        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span>Driver</span>
+          <select
+            value={shotShapes.driver}
+            onChange={(e) => setShotShapes((s) => ({ ...s, driver: e.target.value }))}
+            style={{ padding: "8px 10px", minWidth: 140 }}
+          >
+            {SHAPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span>Fairway woods &amp; hybrids</span>
+          <select
+            value={shotShapes.woods}
+            onChange={(e) => setShotShapes((s) => ({ ...s, woods: e.target.value }))}
+            style={{ padding: "8px 10px", minWidth: 140 }}
+          >
+            {SHAPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+          <span>Irons &amp; wedges</span>
+          <select
+            value={shotShapes.irons}
+            onChange={(e) => setShotShapes((s) => ({ ...s, irons: e.target.value }))}
+            style={{ padding: "8px 10px", minWidth: 140 }}
+          >
+            {SHAPE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+
+      <h2 style={{ marginTop: 28 }}>My bag</h2>
       <p style={{ marginTop: 6, opacity: 0.8 }}>
         Enter typical carry yardages. These seed the first club suggestion and get refined as you log shots.
       </p>
@@ -118,4 +185,3 @@ export default function SettingsPage() {
     </main>
   );
 }
-

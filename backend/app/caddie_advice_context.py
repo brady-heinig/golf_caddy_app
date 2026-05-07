@@ -181,6 +181,8 @@ def build_caddie_advice_context(
     shot_shape: str,
     handicap: float,
     bag: dict[str, Any],
+    shot_shapes: dict[str, Any] | None,
+    lie_detect_meta: dict[str, Any] | None = None,
 ) -> str:
     intel = gather_shot_intel(
         hole=hole,
@@ -193,6 +195,8 @@ def build_caddie_advice_context(
         bag=bag,
         lie=lie,
         metrics=metrics,
+        shot_shapes=shot_shapes,
+        lie_detect_detail=lie_detect_meta,
     )
     hz_osm = hazards_near_landing(features, landing_lat, landing_lon)
     hz_static = hole.get("hazards") or []
@@ -234,8 +238,8 @@ def build_caddie_advice_context(
         f"  Elevation adjustment:   {elev} yd (adds to plays-like)",
         f"  Wind adjustment:      {wadj} yd ({metrics.get('wind_relation', '—')})",
         f"  Plays-like distance:  {plays} yd",
-        f"  Lie:                   {lie}",
-        f"  Shot shape tendency:   {shot_shape}",
+        f"  Lie (from blue dot on map): {lie}",
+        f"  Shot shape (Settings, {intel['shot_shape_from_settings']['club_category']} bucket): {shot_shape}",
         f"  Est. GIR (model):      {gir}% @ handicap {handicap:.1f}",
         "",
         "WEATHER:",

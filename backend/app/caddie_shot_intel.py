@@ -7,7 +7,12 @@ from typing import Any
 from shapely.geometry import LineString, Point, shape
 from shapely.ops import transform, unary_union
 
-from .bag_selection import pick_club_for_plays_like_yards
+from .bag_selection import (
+    club_shape_category,
+    normalize_shot_shapes,
+    pick_club_for_plays_like_yards,
+    shot_shape_for_club,
+)
 from .legacy import weather
 from .routes_caddie_compat import haversine_yards
 
@@ -287,6 +292,8 @@ def gather_shot_intel(
     bag: dict[str, Any],
     lie: str,
     metrics: dict[str, Any],
+    shot_shapes: dict[str, Any] | None,
+    lie_detect_detail: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     tee = hole["tee"]
     gc = hole["green_center"]
@@ -348,6 +355,10 @@ def gather_shot_intel(
     current_club_pick = pick_club_for_plays_like_yards(bag, plays_like)
     next_club_pick = pick_club_for_plays_like_yards(bag, float(rem_pin))
     next_seed = str(next_club_pick["club"])
+    shapes_norm = normalize_shot_shapes(shot_shapes)
+    cur_club_name = str(current_club_pick["club"])
+    eff_shape = shot_shape_for_club(cur_club_name, shapes_norm)
+    shape_bucket = club_shape_category(cur_club_name)
     par_int = par
     if shot_type == "tee_par4_or_5" and carry_planned:
         next_lbl = (
@@ -365,6 +376,11 @@ def gather_shot_intel(
     return {
         "club_for_adjusted_plays_like": current_club_pick,
         "next_shot_club_after_landing": next_club_pick,
+        "shot_shape_from_settings": {
+            "club_category": shape_bucket,
+            "shape": eff_shape,
+            "driver_woods_irons_settings": shapes_norm,
+        },
         "player_position": {
             "player_lat": round(player_lat, 6),
             "player_lon": round(player_lon, 6),
@@ -375,7 +391,9 @@ def gather_shot_intel(
             "blue_dot_matches": "These coordinates are the player / ‘blue dot’ position from the app.",
         },
         "lie_and_situation": {
-            "lie_reported": lie_l,
+            "lie": lie_l,
+            "lie_inferred_from_blue_dot": True,
+            "lie_detection": lie_detect_detail or {},
             "par": par_int,
             "shot_type": shot_type,
             "note": lie_note,
