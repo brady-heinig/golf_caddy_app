@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Annotated, Any
 
 import anthropic
@@ -25,6 +26,24 @@ from .bag_selection import (
 from .deps import get_conn, get_current_user
 
 router = APIRouter(prefix="/caddie", tags=["caddie"])
+
+# Matches "SUMMARY:" with optional markdown bold; model often emits **SUMMARY:** on its own line.
+_CADDIE_SUMMARY_HEAD = re.compile(
+    r"(?:^|[\r\n])\s*(?:#{1,6}\s+)?\*{0,2}\s*SUMMARY\s*:\s*\*{0,2}\s*",
+    re.IGNORECASE,
+)
+
+
+def tts_text_summary_only(text: str) -> str:
+    """ElevenLabs should speak only the SUMMARY paragraph when present (strip labeled briefing above)."""
+    t = (text or "").strip()
+    if not t:
+        return t
+    m = _CADDIE_SUMMARY_HEAD.search(t)
+    if not m:
+        return t
+    rest = t[m.end() :].strip()
+    return rest if rest else t
 
 CADDIE_ADVICE_SYSTEM = (
     "You are an experienced on-course golf caddie. The user message includes STRUCTURED_SHOT_INTEL JSON: "
@@ -293,8 +312,9 @@ def caddie_text_to_speech(
         )
 
     try:
+        spoken = tts_text_summary_only(body.text.strip())
         audio = synthesize_speech_mp3(
-            body.text.strip(),
+            spoken,
             api_key=api_key,
             voice_id=voice,
         )

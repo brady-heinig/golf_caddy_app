@@ -104,13 +104,13 @@ function formatSignedElevYd(v: number): string {
   return `${r > 0 ? "+" : "-"}${body} yd`;
 }
 
-/** Prefer the SUMMARY paragraph for voice when the caddie follows the prompt format. */
+/** Prefer the SUMMARY paragraph for voice when the caddie follows the prompt format (handles **SUMMARY:** etc.). */
 function speechTextFromCaddieReply(full: string): string {
   const trimmed = full.trim();
-  const re = /^SUMMARY:\s*/im;
-  const idx = trimmed.search(re);
-  if (idx < 0) return trimmed;
-  const after = trimmed.slice(idx).replace(re, "").trim();
+  const re = /(?:^|[\r\n])\s*(?:#{1,6}\s+)?\*{0,2}\s*SUMMARY\s*:\s*\*{0,2}\s*/i;
+  const found = re.exec(trimmed);
+  if (!found) return trimmed;
+  const after = trimmed.slice(found.index + found[0].length).trim();
   return after || trimmed;
 }
 
