@@ -46,6 +46,75 @@ def bearing_tee_to_green(tee: dict, green: dict) -> float:
     return float((math.degrees(math.atan2(x, y)) + 360) % 360)
 
 
+def bearing_deg_lat_lon(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+    """Initial bearing from (lat1, lon1) toward (lat2, lon2), degrees in [0, 360)."""
+    lat1r, lon1r = math.radians(lat1), math.radians(lon1)
+    lat2r, lon2r = math.radians(lat2), math.radians(lon2)
+    dlon = math.radians(lon2 - lon1)
+    x = math.sin(dlon) * math.cos(lat2r)
+    y = math.cos(lat1r) * math.sin(lat2r) - math.sin(lat1r) * math.cos(lat2r) * math.cos(dlon)
+    return (math.degrees(math.atan2(x, y)) + 360) % 360
+
+
+def wind_shot_along_cross(
+    wind_mph: float, wind_from_deg: float, bearing_shot_deg: float
+) -> tuple[float, float]:
+    """
+    Project wind onto the shot direction (player → target at bearing_shot_deg).
+    Meteorological wind FROM → air motion toward (from+180)°.
+    along_mph: positive = tailwind; negative = headwind.
+    """
+    wind_to = (float(wind_from_deg) + 180.0) % 360.0
+    rad = math.radians(wind_to - float(bearing_shot_deg))
+    w = float(wind_mph)
+    along = w * math.cos(rad)
+    cross = w * math.sin(rad)
+    return along, cross
+
+
+def wind_yard_head_tail_yds(along_mph: float, baseline_yds: float) -> tuple[float, float]:
+    """Returns (headwind_yds_to_add, tailwind_yds_to_subtract)."""
+    if baseline_yds <= 0:
+        return (0.0, 0.0)
+    b = float(baseline_yds)
+    head_mph = max(0.0, -float(along_mph))
+    tail_mph = max(0.0, float(along_mph))
+    return (b * 0.01 * head_mph, b * 0.005 * tail_mph)
+
+
+def classify_wind_table_category(
+    along_mph: float, cross_mph: float, wind_mph: float
+) -> str:
+    if wind_mph < 0.5:
+        return "calm"
+    a, c = abs(along_mph), abs(cross_mph)
+    if a < 0.08 and c < 0.08:
+        return "calm"
+    ang = math.degrees(math.atan2(c, a))
+    if ang >= 67.5:
+        return "crosswind"
+    if ang <= 22.5:
+        return "headwind" if along_mph < 0 else "tailwind"
+    return "quartering_headwind" if along_mph < 0 else "quartering_tailwind"
+
+
+def wind_relation_label(along_mph: float, cross_mph: float, wind_mph: float) -> str:
+    cat = classify_wind_table_category(along_mph, cross_mph, wind_mph)
+    if cat == "calm":
+        return "Calm"
+    if cat == "headwind":
+        return "Headwind"
+    if cat == "tailwind":
+        return "Tailwind"
+    if cat == "quartering_headwind":
+        return "Quartering headwind"
+    if cat == "quartering_tailwind":
+        return "Quartering tailwind"
+    if cross_mph > 0:
+        return "Crosswind (L→R)"
+    return "Crosswind (R→L)"
+
+
 def wind_relative_to_hole(wind_dir_deg: int, hole_bearing_deg: float) -> str:
     relative = (wind_dir_deg - hole_bearing_deg) % 360
     if relative <= 45 or relative >= 315:
@@ -90,7 +159,12 @@ def get_weather(lat: float, lon: float) -> dict[str, Any]:
         "forecast_days": 1,
     }
     try:
-        r = requests.get(OPEN_METEO_URL, params=params, timeout=15)
+        r = requests.get(
+            OPEN_METEO_URL,
+            params=params,
+            timeout=15,
+            headers={"User-Agent": "golf-caddy-backend/1.0"},
+        )
         r.raise_for_status()
         data = r.json()
         cur = data.get("current") or {}
