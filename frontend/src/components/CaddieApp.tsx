@@ -114,6 +114,32 @@ function speechTextFromCaddieReply(full: string): string {
   return after || trimmed;
 }
 
+/** Uses structured briefing + summary when present; falls back to legacy `assistant` string. */
+function parseCaddieAdvicePayload(data: Record<string, unknown>): { briefing: string | null; summary: string | null } {
+  let briefing = typeof data.briefing === "string" ? data.briefing.trim() : "";
+  let summary = typeof data.summary === "string" ? data.summary.trim() : "";
+  const assistant = typeof data.assistant === "string" ? data.assistant.trim() : "";
+
+  if ((!briefing || !summary) && assistant) {
+    const parts = assistant.split(/\n---\n/);
+    if (parts.length >= 2) {
+      if (!briefing) briefing = parts[0].trim();
+      const tail = parts.slice(1).join("\n---\n").trim();
+      if (!summary)
+        summary =
+          speechTextFromCaddieReply(tail) ||
+          tail.replace(/^\*{0,2}\s*SUMMARY\s*:\s*\*{0,2}\s*/i, "").trim();
+    } else if (!summary) {
+      summary = speechTextFromCaddieReply(assistant) || assistant;
+    }
+  }
+
+  return {
+    briefing: briefing || null,
+    summary: summary || null,
+  };
+}
+
 type MapYardChipDetail = {
   playsYd: number;
   straightYd: number;
@@ -296,7 +322,8 @@ export function CaddieApp() {
   const [showCaddieAdvice, setShowCaddieAdvice] = useState(false);
   const [caddieLoading, setCaddieLoading] = useState(false);
   const [caddieErr, setCaddieErr] = useState<string | null>(null);
-  const [caddieReply, setCaddieReply] = useState<string | null>(null);
+  const [caddieBriefing, setCaddieBriefing] = useState<string | null>(null);
+  const [caddieSummary, setCaddieSummary] = useState<string | null>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsErr, setTtsErr] = useState<string | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -634,9 +661,8 @@ export function CaddieApp() {
   }, [showCaddieAdvice]);
 
   const playCaddieTts = useCallback(async () => {
-    const raw = caddieReply?.trim();
-    if (!raw) return;
-    const text = speechTextFromCaddieReply(raw);
+    const text = (caddieSummary ?? "").trim();
+    if (!text) return;
     setTtsErr(null);
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
@@ -681,15 +707,14 @@ export function CaddieApp() {
     } finally {
       setTtsLoading(false);
     }
-  }, [caddieReply]);
+  }, [caddieSummary]);
 
   /** Free fallback: browser speech synthesis (quality varies by OS). */
   const playDeviceVoice = useCallback(() => {
-    const raw = caddieReply?.trim();
+    const raw = (caddieSummary ?? "").trim();
     if (!raw || typeof window === "undefined" || !window.speechSynthesis) return;
     window.speechSynthesis.cancel();
-    const spoken = speechTextFromCaddieReply(raw);
-    const text = spoken
+    const text = raw
       .replace(/\r/g, "")
       .replace(/\n-{3,}\n/g, ". ")
       .replace(/\n+/g, ". ")
@@ -700,7 +725,7 @@ export function CaddieApp() {
     u.lang = "en-US";
     u.rate = 1;
     window.speechSynthesis.speak(u);
-  }, [caddieReply]);
+  }, [caddieSummary]);
 
   const fetchCaddieAdvice = useCallback(async () => {
     const pos = effectivePos;
@@ -744,10 +769,13 @@ export function CaddieApp() {
               : res.statusText;
         throw new Error(msg || "Request failed");
       }
-      setCaddieReply(String((data as { assistant?: string }).assistant ?? ""));
+      const parsed = parseCaddieAdvicePayload(data as Record<string, unknown>);
+      setCaddieBriefing(parsed.briefing);
+      setCaddieSummary(parsed.summary);
     } catch (e) {
       setCaddieErr(e instanceof Error ? e.message : String(e));
-      setCaddieReply(null);
+      setCaddieBriefing(null);
+      setCaddieSummary(null);
     } finally {
       setCaddieLoading(false);
     }
@@ -760,7 +788,8 @@ export function CaddieApp() {
 
   const talkWithCaddie = () => {
     setCaddieErr(null);
-    setCaddieReply(null);
+    setCaddieBriefing(null);
+    setCaddieSummary(null);
     setTtsErr(null);
     setShowCaddieAdvice(true);
   };
@@ -1484,14 +1513,57 @@ export function CaddieApp() {
                   </button>
                 </div>
               ) : null}
-              {caddieReply ? (
+              {caddieSummary || caddieBriefing ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                  <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{caddieReply}</div>
+                  {caddieSummary ? (
+                    <div style={{ fontSize: 15, lineHeight: 1.5, whiteSpace: "pre-wrap" }}>{caddieSummary}</div>
+                  ) : (
+                    <div style={{ fontSize: 13, color: "rgba(11,18,32,0.65)" }}>
+                      No summary returned — open briefing details below for the labeled lines.
+                    </div>
+                  )}
+                  {caddieBriefing ? (
+                    <details style={{ fontSize: 13 }}>
+                      <summary style={{ cursor: "pointer", color: "rgba(11,18,32,0.75)", userSelect: "none" }}>
+                        Briefing details (8 lines)
+                      </summary>
+                      <div
+                        style={{
+                          marginTop: 8,
+                          padding: "10px 12px",
+                          borderRadius: 8,
+                          background: "rgba(11,18,32,0.04)",
+                          fontSize: 13,
+                          lineHeight: 1.45,
+                          whiteSpace: "pre-wrap",
+                          color: "rgba(11,18,32,0.88)",
+                        }}
+                      >
+                        {caddieBriefing}
+                      </div>
+                    </details>
+                  ) : null}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    <button type="button" className="btn btnPrimary" onClick={() => void playCaddieTts()} disabled={ttsLoading}>
+                    <button
+                      type="button"
+                      className="btn btnPrimary"
+                      onClick={() => void playCaddieTts()}
+                      disabled={ttsLoading || !(caddieSummary ?? "").trim()}
+                      title={!(caddieSummary ?? "").trim() ? "Need a summary to play voice" : undefined}
+                    >
                       {ttsLoading ? "Loading voice…" : "Listen (ElevenLabs)"}
                     </button>
-                    <button type="button" className="btn" onClick={() => playDeviceVoice()} title="Uses your browser; no API key">
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => playDeviceVoice()}
+                      disabled={!(caddieSummary ?? "").trim()}
+                      title={
+                        !(caddieSummary ?? "").trim()
+                          ? "Need a summary for device voice"
+                          : "Uses your browser; no ElevenLabs"
+                      }
+                    >
                       Device voice
                     </button>
                     <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()} disabled={caddieLoading}>

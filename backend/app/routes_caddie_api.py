@@ -23,6 +23,7 @@ from .bag_selection import (
     pick_club_for_plays_like_yards,
     shot_shape_for_club,
 )
+from .caddie_advice_llm import run_caddie_advice_chain
 from .deps import get_conn, get_current_user
 
 router = APIRouter(prefix="/caddie", tags=["caddie"])
@@ -45,40 +46,6 @@ def tts_text_summary_only(text: str) -> str:
     rest = t[m.end() :].strip()
     return rest if rest else t
 
-CADDIE_ADVICE_SYSTEM = (
-    "You are an experienced on-course golf caddie. The user message includes STRUCTURED_SHOT_INTEL JSON: "
-    "facts from the map/OSM plus modeling. Key sections (in order): shot_shape_from_settings, player_position, "
-    "lie_and_situation, intended_landing_target, bunkers/trouble along the planned corridor, fairway_at_landing, "
-    "then **club_recommendation** (second-to-last object), then **next_shot_if_plan_works** (last object).\n"
-    "Treat STRUCTURED_SHOT_INTEL as ground truth if it conflicts with narrative prose.\n\n"
-    "**club_recommendation** includes:\n"
-    "- go_for_it + go_for_it_explanation: whether a driver/fairway-wood could realistically reach or effectively "
-    "carry the green line per bag carries AND whether severe hazard pinches that landing (model heuristic).\n"
-    "- ideal_second_shot_distance_yds / suggested_layup_carry_yds: when dogleg or hazards argue against "
-    "‘driver everywhere’, these hint an ideal remaining yardage for the next shot or a tee layup carry.\n"
-    "- club_for_adjusted_plays_like: bag algorithm — **smallest listed carry ≥ adjusted plays-like yards** "
-    "(most loft that still covers the number).\n"
-    "You must weigh corridor hazards, fairway width at landing, lie, wind/elevation (narrative), go_for_it, "
-    "and any ideal layup fields **before** writing CLUB. Choose less club, a knockdown, or a layup when those "
-    "fields contradict a naive full swing with club_for_adjusted_plays_like.\n\n"
-    "Lie comes from the blue dot vs OSM polygons; shot_shape_from_settings matches driver vs woods vs irons buckets.\n"
-    "If the bag is empty or incomplete, say so briefly and still give safe guidance.\n\n"
-    "Format your answer EXACTLY like this (brief labels first; spoken recap last):\n"
-    "CURRENT_SHOT: [e.g. tee ball par-4, layup, approach from fairway]\n"
-    "AIM: [start line / curve; reference bunkers left/right from JSON]\n"
-    "TROUBLE: [what to avoid from bunkers/water lists, or 'clear']\n"
-    "FAIRWAY: [fairway_at_landing width + inside polygon]\n"
-    "GO_FOR_IT: [yes or no — one short clause tied to club_recommendation]\n"
-    "IDEAL_DISTANCE_NOTE: [ideal_second_shot_distance_yds / suggested_layup_carry_yds from JSON when present; "
-    "otherwise 'n/a']\n"
-    "CLUB: [final club + shot type after considering everything above]\n"
-    "NEXT_SHOT: [from next_shot_if_plan_works.summary — shorten if needed]\n"
-    "---\n"
-    "SUMMARY: [3–6 sentences of natural speech ONLY — this is what gets read aloud in the app; "
-    "do not repeat label headers verbatim; synthesize aim, trouble, club choice, and next shot into one "
-    "clear talk-track for the player]\n"
-)
-
 
 class CaddieAdviceIn(BaseModel):
     course_id: str = Field(min_length=1, max_length=128)
@@ -91,7 +58,11 @@ class CaddieAdviceIn(BaseModel):
 
 
 class CaddieAdviceOut(BaseModel):
-    assistant: str
+    briefing: str = Field(description="Eight labeled briefing lines (shown behind dropdown in app)")
+    summary: str = Field(description="Single spoken paragraph for display and TTS")
+    assistant: str = Field(
+        description="Full legacy text: briefing + --- + SUMMARY: summary (for older clients)",
+    )
 
 
 class CaddieTtsIn(BaseModel):
@@ -271,25 +242,20 @@ def caddie_advice(
 
     try:
         client = anthropic.Anthropic(api_key=api_key)
-        msg = client.messages.create(
+        briefing, summary_plain = run_caddie_advice_chain(
+            ctx=ctx,
+            user_line=user_line,
+            client=client,
             model=model,
-            max_tokens=500,
-            system=CADDIE_ADVICE_SYSTEM,
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"COURSE CONTEXT\n{ctx}\n\nPLAYER QUESTION\n{user_line}",
-                },
-            ],
         )
-        assistant = msg.content[0].text
+        assistant = f"{briefing}\n---\nSUMMARY: {summary_plain}"
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Caddie unavailable: {e}",
         ) from e
 
-    return CaddieAdviceOut(assistant=assistant)
+    return CaddieAdviceOut(briefing=briefing, summary=summary_plain, assistant=assistant)
 
 
 @router.post("/tts")
