@@ -9,6 +9,8 @@ import * as turf from "@turf/turf";
 
 import "maplibre-gl/dist/maplibre-gl.css";
 
+import { CaddieStructuredIntelSummary } from "@/components/CaddieStructuredIntelSummary";
+
 type Course = { id: string; name: string };
 type HoleResp = any;
 type CourseDetail = {
@@ -1489,7 +1491,7 @@ export function CaddieApp() {
                           ▼
                         </span>
                       </summary>
-                      <pre className="caddieStructuredIntelPre">{JSON.stringify(caddieStructuredIntel, null, 2)}</pre>
+                      <CaddieStructuredIntelSummary intel={caddieStructuredIntel} />
                     </details>
                   ) : null}
                   <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
