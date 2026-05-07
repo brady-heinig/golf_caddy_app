@@ -1,0 +1,769 @@
+@import url("maplibre-gl/dist/maplibre-gl.css");
+
+:root{
+  --phoneW: 390px;
+  --phoneH: 844px;
+  --bg: #0b1220;
+  --card: #ffffff;
+  --text: #0b1220;
+  --muted: rgba(11,18,32,0.65);
+  --shadow: 0 16px 44px rgba(0,0,0,0.35);
+  --accent: #16a34a;
+  --accent-weak: rgba(22,163,74,0.14);
+  --accent-weak2: rgba(22,163,74,0.22);
+  --accent-mid: rgba(22,163,74,0.35);
+  --accent-strong: rgba(22,163,74,0.9);
+  --accent-bg: rgba(22,163,74,0.10);
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  background: radial-gradient(1100px 700px at 50% 0%, #111a30 0%, #070b14 60%, #05070d 100%);
+  color: white;
+  font-family: -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+  overflow: hidden;
+}
+
+#root{
+  height: 100%;
+  display: grid;
+  place-items: center;
+}
+
+.phoneShell{
+  width: min(100vw, var(--phoneW));
+  height: min(100dvh, var(--phoneH));
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  box-sizing: border-box;
+}
+
+.modePickerShell{
+  justify-content: center;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.modePickerCard{
+  background: var(--card);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 18px 18px;
+  box-shadow: var(--shadow);
+  border: 1px solid rgba(0,0,0,0.10);
+  text-align: center;
+  width: 100%;
+  box-sizing: border-box;
+}
+.modePickerTitle{
+  font-size: 22px;
+  font-weight: 1000;
+  margin: 0 0 8px 0;
+}
+.modePickerSub{
+  font-size: 14px;
+  font-weight: 700;
+  opacity: 0.72;
+  margin: 0 0 14px 0;
+  line-height: 1.35;
+}
+.modePickerBtns{
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.modePickerBtn{
+  height: 52px;
+  border-radius: 14px;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.95);
+  font-weight: 900;
+  font-size: 16px;
+  cursor: pointer;
+  color: var(--text);
+}
+.modePickerBtnPrimary{
+  background: var(--accent);
+  color: white;
+  border: none;
+}
+.modePickerHint{
+  margin-top: 14px;
+  font-size: 12px;
+  font-weight: 700;
+  opacity: 0.6;
+  line-height: 1.35;
+}
+
+.bar{
+  background: var(--card);
+  color: var(--text);
+  border-radius: 14px;
+  padding: 10px 12px;
+  box-shadow: 0 10px 28px rgba(0,0,0,0.18);
+  border: 1px solid rgba(0,0,0,0.10);
+  box-sizing: border-box;
+}
+
+.header{
+  height: 68px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+
+.metricLabel{
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 800;
+  opacity: 0.65;
+}
+.metricValue{
+  font-size: 22px;
+  font-weight: 900;
+  line-height: 1;
+}
+.metricValueRow{
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.metricHeadWrap{
+  position: relative;
+}
+.distInfoBtn{
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 1px solid rgba(11,18,32,0.22);
+  background: rgba(11,18,32,0.06);
+  color: rgba(11,18,32,0.72);
+  font-size: 11px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.distInfoPopover{
+  display: none;
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 6px;
+  z-index: 30;
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: #0b1220;
+  color: #e6edf3;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  text-align: left;
+  min-width: 200px;
+  max-width: min(280px, 92vw);
+  box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.distInfoPopover.open{
+  display: block;
+}
+.distInfoPopover .diLine{
+  margin: 0 0 8px 0;
+}
+.distInfoPopover .diLine:last-child{
+  margin-bottom: 0;
+}
+.distInfoPopover .diMuted{
+  opacity: 0.75;
+  font-weight: 600;
+}
+.diBreakRow, .ycBreakRow{
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+}
+.diBreakRow .diValStrong{
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.distInfoElevPos{ color: #3fd671; }
+.distInfoElevNeg{ color: #ff7b72; }
+.distInfoWindAdds{ color: #3fd671; font-weight: 700; }
+.distInfoWindHelps{ color: #ff7b72; font-weight: 700; }
+.distInfoWindNeutral{ color: inherit; opacity: 0.9; font-weight: 700; }
+
+/* Map leg labels: no filled bubble — reads on imagery via text shadow */
+.yardChipHost{
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #f6f8fc;
+  font-size: 10px;
+  font-weight: 800;
+  text-align: center;
+  line-height: 1.25;
+  min-width: unset;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  pointer-events: auto;
+}
+.yardChipRow{
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.yardChipRow > span:first-of-type{
+  color: #f6f8fc;
+  text-shadow:
+    0 0 4px rgba(0,0,0,0.95),
+    0 1px 3px rgba(0,0,0,0.9),
+    0 0 1px rgba(0,0,0,1);
+}
+.yardChipInfoBtn{
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 1px solid rgba(255,255,255,0.65);
+  background: rgba(0,0,0,0.2);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 800;
+  font-style: italic;
+  line-height: 1;
+  padding: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  text-shadow: 0 0 3px rgba(0,0,0,0.95), 0 1px 2px rgba(0,0,0,0.9);
+}
+.yardChipPopover{
+  display: none;
+  margin-top: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: #0b1220;
+  color: #e6edf3;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1.35;
+  text-align: left;
+  min-width: 148px;
+  max-width: 220px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  border: 1px solid rgba(255,255,255,0.12);
+  z-index: 25;
+}
+.yardChipPopover .ycLine{ margin: 0 0 6px 0; }
+.yardChipPopover .ycMuted{ opacity: 0.72; font-weight: 600; flex-shrink: 0; }
+.ycDiagVal{ font-weight: 800; flex-shrink: 0; color: inherit; }
+.yardChipElevPos{ color: #3fd671; }
+.yardChipElevNeg{ color: #ff7b72; }
+.yardChipWindAdds{ color: #3fd671; font-weight: 700; }
+.yardChipWindHelps{ color: #ff7b72; font-weight: 700; }
+.yardChipWindNeutral{ color: inherit; font-weight: 700; flex-shrink: 0; }
+
+.metricSub{
+  margin-top: 4px;
+  font-size: 13px;
+  font-weight: 700;
+  opacity: 0.75;
+}
+
+.mapCard{
+  flex: 1 1 auto;
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: var(--shadow);
+  border: 0;
+  position: relative;
+}
+
+/* Hide MapLibre default UI controls (nav/compass/attribution/info). */
+.mapCard .maplibregl-ctrl-top-left,
+.mapCard .maplibregl-ctrl-top-right,
+.mapCard .maplibregl-ctrl-bottom-left,
+.mapCard .maplibregl-ctrl-bottom-right{
+  display: none !important;
+}
+
+.footer{
+  height: 72px;
+  display: grid;
+  grid-template-columns: 1.1fr 0.6fr 1fr 0.6fr 1.6fr;
+  align-items: center;
+  gap: 10px;
+}
+
+.btn{
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(0,0,0,0.12);
+  background: rgba(255,255,255,0.9);
+  font-weight: 900;
+  cursor: pointer;
+}
+.btnPrimary{
+  background: var(--accent);
+  color: white;
+  border: none;
+}
+.btn:active{
+  transform: translateY(1px);
+}
+
+.mapHud{
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 10;
+  pointer-events: none;
+  background: rgba(255,255,255,0.9);
+  color: #111827;
+  border: 1px solid rgba(0,0,0,0.08);
+  border-radius: 12px;
+  padding: 8px 10px;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+  font-weight: 800;
+  font-size: 12px;
+}
+
+.windHud{
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 10;
+  pointer-events: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.90);
+  color: #111827;
+  border: 1px solid rgba(0,0,0,0.08);
+  box-shadow: 0 6px 18px rgba(0,0,0,0.22);
+}
+
+.windArrow{
+  width: 28px;
+  height: 28px;
+  position: relative;
+  transform: rotate(var(--wind-rot, 0deg));
+  transform-origin: 50% 50%;
+}
+
+.windArrowStem{
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 16px;
+  background: #111827;
+  border-radius: 3px;
+  /* Start just below the arrow head */
+  transform: translate(-50%, -10%);
+  z-index: 1;
+}
+
+.windArrowHead{
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 8px solid transparent;
+  border-right: 8px solid transparent;
+  /* Pointing "up" at 0deg */
+  border-bottom: 12px solid #111827;
+  transform: translate(-50%, -120%);
+  z-index: 2;
+}
+.windText{
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  line-height: 1;
+}
+.windLine1{ font-size: 13px; font-weight: 900; }
+.windLine2{ font-size: 12px; font-weight: 800; opacity: 0.75; }
+
+.modalOverlay{
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  background: rgba(0,0,0,0.55);
+  display: grid;
+  place-items: center;
+  padding: 14px;
+  box-sizing: border-box;
+}
+
+.modalCard{
+  width: min(100%, var(--phoneW));
+  max-height: min(92dvh, 740px);
+  overflow: hidden;
+  background: rgba(255,255,255,0.98);
+  color: #0b1220;
+  border-radius: 16px;
+  box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+  border: 1px solid rgba(255,255,255,0.25);
+  display: flex;
+  flex-direction: column;
+}
+
+.modalHeader{
+  padding: 12px 12px 8px 12px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  border-bottom: 1px solid rgba(11,18,32,0.08);
+}
+.modalTitle{
+  font-size: 16px;
+  font-weight: 1000;
+}
+.modalSub{
+  font-size: 12px;
+  font-weight: 800;
+  opacity: 0.72;
+  margin-top: 2px;
+}
+.modalClose{
+  height: 40px;
+  padding: 0 12px;
+}
+
+.holeScorePopupOverlay{
+  z-index: 1001;
+}
+.holeScorePopupCard{
+  width: min(100%, 300px);
+  max-height: none;
+}
+.holeScorePopupBody{
+  padding: 8px 16px 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+}
+.holeScorePopupAdjuster{
+  flex: 0 0 auto;
+  padding: 12px 8px;
+  min-width: 0;
+}
+
+.scorecardBody{
+  padding: 10px 10px 12px 10px;
+  overflow: hidden;
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.scorecardSplit{
+  --scorecard-hdr-row-h: 36px;
+  --scorecard-player-row-h: 52px;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  flex: 1 1 auto;
+  min-height: 0;
+  margin: 0 -4px;
+  padding: 0 4px 0 4px;
+}
+.scorecardPinnedCol{
+  flex: 0 0 104px;
+  width: 104px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  align-self: stretch;
+  z-index: 6;
+}
+.scorecardPinnedMeta{
+  box-sizing: border-box;
+  background: rgba(11,18,32,0.04);
+  border: 1px solid rgba(11,18,32,0.14);
+  border-right: none;
+  border-radius: 10px 0 0 10px;
+  padding: 0;
+  display: grid;
+  grid-template-rows: repeat(3, var(--scorecard-hdr-row-h));
+  align-items: stretch;
+  margin-bottom: 10px;
+  box-shadow: 6px 0 16px rgba(11,18,32,0.08);
+  flex-shrink: 0;
+  overflow: hidden;
+}
+.scorecardHScroll{
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-x;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  padding: 0 0 4px 0;
+}
+.scorecardScrollWide{
+  --scorecard-scroll-cols: repeat(18, minmax(44px, 48px));
+  min-width: max(100%, calc(18 * 44px));
+}
+.scorecardScrollHeader{
+  display: grid;
+  grid-template-columns: var(--scorecard-scroll-cols);
+  grid-template-rows: repeat(3, var(--scorecard-hdr-row-h));
+  gap: 0;
+  align-items: stretch;
+  margin-bottom: 10px;
+  background: rgba(11,18,32,0.075);
+  border: 1px solid rgba(11,18,32,0.14);
+  border-left: 1px solid rgba(11,18,32,0.14);
+  border-radius: 0 10px 10px 0;
+  overflow: hidden;
+}
+.scorecardMetaLabel{
+  font-size: 10px;
+  font-weight: 1000;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.62;
+  text-align: center;
+  line-height: 1.35;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scorecardPinnedMeta .scorecardMetaLabel{
+  box-sizing: border-box;
+  flex: none;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(11,18,32,0.12);
+  min-height: 0;
+}
+.scorecardPinnedMeta .scorecardMetaLabel:last-child{
+  border-bottom: none;
+}
+.scorecardHdrData{
+  box-sizing: border-box;
+  text-align: center;
+  padding: 6px 2px;
+  border-radius: 0;
+  border: none;
+  border-right: 1px solid rgba(11,18,32,0.12);
+  border-bottom: 1px solid rgba(11,18,32,0.12);
+  background: transparent;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  font-weight: 1000;
+  line-height: 1.2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.scorecardHdrData.scorecardHdrRowPar{
+  border-bottom: none;
+}
+.scorecardHdrRowHole:nth-child(18),
+.scorecardHdrRowHcp:nth-child(36),
+.scorecardHdrRowPar:nth-child(54){
+  border-right: none;
+}
+.scorecardHdrRowHole{
+  font-size: 14px;
+  font-weight: 1000;
+}
+.scorecardHdrRowPar{
+  font-size: 13px;
+  font-weight: 600;
+  opacity: 0.92;
+}
+.scorecardHdrRowHcp{
+  font-size: 12px;
+  font-weight: 600;
+  opacity: 0.8;
+}
+.scorecardGridRow{
+  display: grid;
+  grid-template-columns: var(--scorecard-scroll-cols);
+  grid-auto-rows: var(--scorecard-player-row-h);
+  gap: 0;
+  align-items: stretch;
+}
+.scorecardPinnedName{
+  box-sizing: border-box;
+  background: rgba(255,255,255,0.98);
+  border-radius: 10px;
+  border: 1px solid rgba(11,18,32,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--scorecard-player-row-h);
+  height: var(--scorecard-player-row-h);
+  margin-bottom: 6px;
+  box-shadow: 4px 0 12px rgba(11,18,32,0.06);
+  flex-shrink: 0;
+}
+.scorecardPinnedName:last-child{
+  margin-bottom: 0;
+}
+.scorecardNameCell{
+  flex-direction: column;
+  align-items: stretch !important;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px;
+}
+.scorecardNameInput{
+  width: 100%;
+  border: none;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 900;
+  color: #0b1220;
+  outline: none;
+  padding: 0;
+}
+.scorecardPlayerRow{
+  margin-bottom: 6px;
+}
+.scorecardPlayerRow:last-child{
+  margin-bottom: 0;
+}
+.scorecardPinnedNameActive{
+  border-color: rgba(22,163,74,0.55);
+  box-shadow: 4px 0 14px rgba(22,163,74,0.16);
+}
+.scorecardAddPl{
+  flex: 0 0 auto;
+  height: 44px;
+}
+.scoreCell{
+  box-sizing: border-box;
+  border-radius: 8px;
+  border: 1px solid rgba(11,18,32,0.14);
+  background: rgba(255,255,255,0.92);
+  padding: 4px 3px;
+  text-align: center;
+  cursor: pointer;
+  min-width: 0;
+  outline: none;
+}
+/* Match header grid lines so columns share the same track widths (no row gap). */
+.scorecardGridRow > .scoreCell{
+  border-radius: 0;
+  border: none;
+  border-right: 1px solid rgba(11,18,32,0.12);
+  border-bottom: 1px solid rgba(11,18,32,0.12);
+  background: rgba(255,255,255,0.96);
+  min-height: var(--scorecard-player-row-h);
+  min-width: 0;
+}
+.scorecardGridRow > .scoreCell:nth-child(18){
+  border-right: none;
+}
+.scoreCell:focus-visible{
+  box-shadow: 0 0 0 2px var(--accent-mid);
+}
+.scoreCell.active{
+  border-color: var(--accent-strong);
+  box-shadow: 0 0 0 2px var(--accent-weak) inset;
+}
+.scorecardGridRow > .scoreCell.active{
+  background: var(--accent-bg);
+  box-shadow: 0 0 0 2px var(--accent-weak2) inset;
+}
+.scoreCellInGrid{
+  box-sizing: border-box;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2px;
+}
+.scoreVal{
+  margin-top: 4px;
+  font-size: 16px;
+  font-weight: 1000;
+  line-height: 1;
+  min-height: 18px;
+}
+.scoreValSolo{
+  margin-top: 0;
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 1000;
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.scoreAdjuster{
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  width: 100%;
+  max-width: 100%;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+.scoreAdjBtn{
+  flex: 0 0 auto;
+  width: 16px;
+  height: 22px;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  font-size: 16px;
+  font-weight: 1000;
+  line-height: 1;
+  color: rgba(11,18,32,0.55);
+  cursor: pointer;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  margin: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+.scoreAdjuster > .scoreAdjBtn:first-of-type{
+  margin-right: -5px;
+}
+.scoreAdjuster > .scoreAdjBtn:last-of-type{
+  margin-left: -5px;
+}
+.scoreAdjBtn:disabled{
+  opacity: 0.3;
+  cursor: default;
+}
+.scoreAdjBtn:active:not(:disabled){
+  color: #0b1220;
+  opacity: 1;
+}
+.scoreAdjVal{
+  flex: 0 0 auto;
+  min-width: 1.25em;
+  font-size: 18px;
+  font-weight: 1000;
+  line-height: 1;
+  text-align: center;
+  color: #0b1220;
+  font-variant-numeric: tabular-nums;
+  padding: 0;
+}
+

@@ -1,0 +1,23 @@
+/BUILD_PLAN.md
+/stat6395_finalproject.pdf
+
+# Node / Next
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+frontend/.env*.local
+.npm-cache/
+
+# Python
+**/__pycache__/
+**/*.pyc
+backend/.venv/
+**/.venv/
+
+# Local DB / secrets
+**/*.db
+**/*.sqlite
+**/*.sqlite3
+
+# OS/editor
+.DS_Store
