@@ -287,6 +287,10 @@ export function CaddieApp() {
   const [caddieLoading, setCaddieLoading] = useState(false);
   const [caddieErr, setCaddieErr] = useState<string | null>(null);
   const [caddieReply, setCaddieReply] = useState<string | null>(null);
+  const [ttsLoading, setTtsLoading] = useState(false);
+  const [ttsErr, setTtsErr] = useState<string | null>(null);
+  const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
+  const ttsObjectUrlRef = useRef<string | null>(null);
   const [scoreEditCell, setScoreEditCell] = useState<{ playerId: string; hole: number } | null>(null);
   const [activeCardPlayerId, setActiveCardPlayerId] = useState<string | null>(null);
   const [wxOverride, setWxOverride] = useState<any | null>(null);
@@ -603,6 +607,68 @@ export function CaddieApp() {
     if (!showScore) setScoreEditCell(null);
   }, [showScore]);
 
+  useEffect(() => {
+    if (showCaddieAdvice) return;
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+    if (ttsObjectUrlRef.current) {
+      URL.revokeObjectURL(ttsObjectUrlRef.current);
+      ttsObjectUrlRef.current = null;
+    }
+    setTtsErr(null);
+  }, [showCaddieAdvice]);
+
+  const playCaddieTts = useCallback(async () => {
+    const text = caddieReply?.trim();
+    if (!text) return;
+    setTtsErr(null);
+    if (ttsAudioRef.current) {
+      ttsAudioRef.current.pause();
+      ttsAudioRef.current = null;
+    }
+    if (ttsObjectUrlRef.current) {
+      URL.revokeObjectURL(ttsObjectUrlRef.current);
+      ttsObjectUrlRef.current = null;
+    }
+    setTtsLoading(true);
+    try {
+      const res = await fetch("/api/caddie/tts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok) {
+        const data: unknown = await res.json().catch(() => ({}));
+        const detail = (data as { detail?: unknown }).detail;
+        const msg =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? (detail as { msg?: string }[]).map((d) => d?.msg ?? JSON.stringify(d)).join("; ")
+              : res.statusText;
+        throw new Error(msg || "Voice request failed");
+      }
+      const blob = await res.blob();
+      if (!blob.size) throw new Error("Empty audio response");
+      const url = URL.createObjectURL(blob);
+      ttsObjectUrlRef.current = url;
+      const audio = new Audio(url);
+      ttsAudioRef.current = audio;
+      audio.onended = () => {
+        URL.revokeObjectURL(url);
+        if (ttsObjectUrlRef.current === url) ttsObjectUrlRef.current = null;
+        if (ttsAudioRef.current === audio) ttsAudioRef.current = null;
+      };
+      await audio.play();
+    } catch (e) {
+      setTtsErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTtsLoading(false);
+    }
+  }, [caddieReply]);
+
   const fetchCaddieAdvice = useCallback(async () => {
     const pos = effectivePos;
     if (!pos) {
@@ -662,6 +728,7 @@ export function CaddieApp() {
   const talkWithCaddie = () => {
     setCaddieErr(null);
     setCaddieReply(null);
+    setTtsErr(null);
     setShowCaddieAdvice(true);
   };
 
@@ -1387,9 +1454,15 @@ export function CaddieApp() {
               {caddieReply ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div style={{ fontSize: 14, lineHeight: 1.45, whiteSpace: "pre-wrap" }}>{caddieReply}</div>
-                  <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()} disabled={caddieLoading}>
-                    Refresh advice
-                  </button>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    <button type="button" className="btn btnPrimary" onClick={() => void playCaddieTts()} disabled={ttsLoading}>
+                      {ttsLoading ? "Loading voice…" : "Listen"}
+                    </button>
+                    <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()} disabled={caddieLoading}>
+                      Refresh advice
+                    </button>
+                  </div>
+                  {ttsErr ? <div style={{ fontSize: 13, color: "#b91c1c" }}>{ttsErr}</div> : null}
                 </div>
               ) : null}
             </div>

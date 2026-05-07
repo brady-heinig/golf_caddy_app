@@ -7,12 +7,13 @@ from typing import Annotated, Any
 import anthropic
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .caddie_advice_context import build_caddie_advice_context
 from .caddie_lie_detect import classify_lie_from_blue_dot
 from .caddie_shot_intel import resolve_intended_landing
-from .deps import get_conn, get_current_user
+from .elevenlabs_tts import synthesize_speech_mp3
 from .legacy import course_data as course_data_mod
 from .legacy import course_features
 from .routes_caddie_compat import get_course, get_hole, get_plays_like_path, list_courses
@@ -21,6 +22,7 @@ from .bag_selection import (
     pick_club_for_plays_like_yards,
     shot_shape_for_club,
 )
+from .deps import get_conn, get_current_user
 
 router = APIRouter(prefix="/caddie", tags=["caddie"])
 
@@ -64,6 +66,11 @@ class CaddieAdviceIn(BaseModel):
 
 class CaddieAdviceOut(BaseModel):
     assistant: str
+
+
+class CaddieTtsIn(BaseModel):
+    text: str = Field(min_length=1, max_length=8000)
+    voice_id: str | None = Field(default=None, max_length=64)
 
 
 def _get_user_settings(conn: psycopg.Connection, user_id: int) -> dict[str, Any]:
@@ -257,4 +264,38 @@ def caddie_advice(
         ) from e
 
     return CaddieAdviceOut(assistant=assistant)
+
+
+@router.post("/tts")
+def caddie_text_to_speech(
+    body: CaddieTtsIn,
+    _user: Annotated[dict, Depends(get_current_user)],
+) -> Response:
+    """Convert caddie (or any) text to speech via ElevenLabs. API key is server-side only."""
+    api_key = os.environ.get("ELEVENLABS_API_KEY")
+    if not api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="ELEVENLABS_API_KEY is not configured on the server",
+        )
+    voice = (body.voice_id or os.environ.get("ELEVENLABS_VOICE_ID") or "").strip()
+    if not voice:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Set ELEVENLABS_VOICE_ID on the server (or pass voice_id). Pick a voice ID from elevenlabs.io → Voices.",
+        )
+    try:
+        audio = synthesize_speech_mp3(
+            body.text.strip(),
+            api_key=api_key,
+            voice_id=voice,
+            model_id=os.environ.get("ELEVENLABS_MODEL_ID"),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"ElevenLabs error: {e}",
+        ) from e
+
+    return Response(content=audio, media_type="audio/mpeg")
 
