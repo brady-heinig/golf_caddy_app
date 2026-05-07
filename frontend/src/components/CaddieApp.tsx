@@ -27,6 +27,20 @@ const MAP_FOLLOW_DURATION_MS = 480;
 type LL = { lat: number; lon: number };
 type RoundMode = "live" | "sim";
 
+const SCORE_STRIP_MIN = 1;
+const SCORE_STRIP_MAX = 15;
+
+type ScorecardPlayerRow = { id: string; name: string; scores: (number | null)[] };
+
+function genPlayerId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `p-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+function emptyScores18(): (number | null)[] {
+  return Array.from({ length: 18 }, () => null);
+}
+
 function haversineYards(a: LL, b: LL): number {
   const R = 6371008.8; // meters
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -238,6 +252,12 @@ export function CaddieApp() {
   const simPosLatestRef = useRef<LL | null>(null);
   if (simPos) simPosLatestRef.current = simPos;
   const [mapBearing, setMapBearing] = useState<number>(0);
+  const [showScore, setShowScore] = useState<boolean>(false);
+  const [scorecardPlayers, setScorecardPlayers] = useState<ScorecardPlayerRow[]>(() => {
+    const id = genPlayerId();
+    return [{ id, name: "You", scores: emptyScores18() }];
+  });
+  const [showHolePicker, setShowHolePicker] = useState<boolean>(false);
 
   const mapRef = useRef<Map | null>(null);
   const mapEl = useRef<HTMLDivElement | null>(null);
@@ -371,6 +391,66 @@ export function CaddieApp() {
   const windFromDeg = w?.wind_dir_deg ?? null;
   const windCard = w?.wind_dir_card ?? "";
   const weatherOk = Boolean(w && !w.error && windMph != null && windFromDeg != null);
+
+  const primaryScores = scorecardPlayers[0]?.scores ?? [];
+  const scoreStr = useMemo(() => {
+    const pars = (course?.holes ?? []).map((h) => Number(h.par) || 0);
+    let parPlayed = 0;
+    let strokesPlayed = 0;
+    let anyPlayed = false;
+    for (let i = 0; i < 18; i++) {
+      const p = pars[i] ?? 0;
+      const s = primaryScores[i];
+      if (typeof s === "number") {
+        anyPlayed = true;
+        strokesPlayed += s;
+        if (p > 0) parPlayed += p;
+      }
+    }
+    if (!anyPlayed) return "E";
+    if (parPlayed <= 0) return "E";
+    const diff = strokesPlayed - parPlayed;
+    if (diff === 0) return "E";
+    return diff > 0 ? `+${diff}` : `${diff}`;
+  }, [course?.holes, primaryScores]);
+
+  const parForHole = (hn: number) => {
+    const p = (course?.holes ?? [])[hn - 1]?.par;
+    const n = Number(p);
+    return Number.isFinite(n) && n > 0 ? n : 4;
+  };
+
+  const clampScore = (n: number) => Math.min(SCORE_STRIP_MAX, Math.max(SCORE_STRIP_MIN, Math.round(n)));
+
+  const setHoleScore = (playerId: string, hn: number, score: number) => {
+    setScorecardPlayers((prev) =>
+      prev.map((pl) => {
+        if (pl.id !== playerId) return pl;
+        const scores = pl.scores.slice();
+        scores[hn - 1] = clampScore(score);
+        return { ...pl, scores };
+      }),
+    );
+  };
+
+  const adjustHoleScore = (playerId: string, hn: number, delta: number) => {
+    setScorecardPlayers((prev) =>
+      prev.map((pl) => {
+        if (pl.id !== playerId) return pl;
+        const cur = pl.scores[hn - 1];
+        const base = typeof cur === "number" ? cur : parForHole(hn);
+        const scores = pl.scores.slice();
+        scores[hn - 1] = clampScore(base + delta);
+        return { ...pl, scores };
+      }),
+    );
+  };
+
+  const talkWithCaddie = () => {
+    // Hosted app uses round-based chat (Supabase-backed).
+    // Send them to Past rounds where they can start/resume.
+    window.location.href = "/rounds";
+  };
 
   // Create map after mode chosen.
   useEffect(() => {
@@ -974,46 +1054,168 @@ export function CaddieApp() {
       </div>
 
       <div className="bar footer">
-        <div style={{ display: "flex", alignItems: "center", gap: 10, width: "100%" }}>
-          <label className="muted" style={{ fontSize: 12 }}>
-            Course
-            <select
-              value={courseId}
-              onChange={(e) => {
-                setCourseId(e.target.value);
-                setHoleNum(1);
-              }}
-              style={{ marginLeft: 8 }}
-            >
-              {courses.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div style={{ flex: 1 }} />
-          <button className="btn" onClick={() => setHoleNum((h) => Math.max(1, h - 1))}>
-            ◀
-          </button>
-          <button type="button" className="btn">
-            Hole {holeNum}
-          </button>
-          <button className="btn" onClick={() => setHoleNum((h) => Math.min(18, h + 1))}>
-            ▶
-          </button>
-        </div>
+        <button
+          className="btn"
+          onClick={() => setShowScore(true)}
+          aria-label="Open scorecard"
+          title="Scorecard"
+        >
+          {scoreStr}
+        </button>
+        <button className="btn" onClick={() => setHoleNum((h) => Math.max(1, h - 1))} aria-label="Previous hole">
+          ◀
+        </button>
+        <button
+          type="button"
+          className="btn"
+          onClick={() => setShowHolePicker(true)}
+          aria-label="Select hole"
+          title="Hole"
+        >
+          Hole {holeNum}
+        </button>
+        <button className="btn" onClick={() => setHoleNum((h) => Math.min(18, h + 1))} aria-label="Next hole">
+          ▶
+        </button>
+        <button className="btn btnPrimary" onClick={talkWithCaddie} aria-label="Talk with caddie">
+          Talk with caddie
+        </button>
       </div>
 
-      <div style={{ padding: 14, maxWidth: 520, margin: "0 auto" }}>
-        <div className="muted" style={{ fontSize: 13 }}>
-          {course?.name ? `${course.name} · Par ${course.par ?? ""}` : "Loading course…"}
+      {showHolePicker ? (
+        <div
+          className="modalOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Select hole"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowHolePicker(false);
+          }}
+        >
+          <div className="modalCard" style={{ maxHeight: "70dvh" }}>
+            <div className="modalHeader">
+              <div>
+                <div className="modalTitle">Select hole</div>
+                <div className="modalSub">{course?.name ?? courseId}</div>
+              </div>
+              <button type="button" className="btn modalClose" onClick={() => setShowHolePicker(false)}>
+                Done
+              </button>
+            </div>
+            <div style={{ padding: 12, overflow: "auto" }}>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 8 }}>
+                {Array.from({ length: 18 }, (_, i) => {
+                  const hn = i + 1;
+                  const active = hn === holeNum;
+                  return (
+                    <button
+                      key={hn}
+                      type="button"
+                      className="btn"
+                      style={{
+                        height: 44,
+                        borderColor: active ? "rgba(22,163,74,0.65)" : undefined,
+                        background: active ? "rgba(22,163,74,0.10)" : undefined,
+                      }}
+                      onClick={() => {
+                        setHoleNum(hn);
+                        setShowHolePicker(false);
+                      }}
+                    >
+                      {hn}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
         </div>
-        <div className="muted" style={{ fontSize: 12, marginTop: 6 }}>
-          Hosted mode: the map/yardage experience matches the `caddie/` prototype. Chat in this hosted app is round-based
-          at `/rounds` (Supabase-backed).
+      ) : null}
+
+      {showScore ? (
+        <div
+          className="modalOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Scorecard"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowScore(false);
+          }}
+        >
+          <div className="modalCard">
+            <div className="modalHeader">
+              <div>
+                <div className="modalTitle">Scorecard</div>
+                <div className="modalSub">{course?.name ?? "Course"}</div>
+              </div>
+              <button className="btn modalClose" onClick={() => setShowScore(false)}>
+                Done
+              </button>
+            </div>
+
+            <div style={{ padding: 12, overflow: "auto" }}>
+              {scorecardPlayers.map((pl) => {
+                const cur = pl.scores[holeNum - 1];
+                const display = typeof cur === "number" ? cur : parForHole(holeNum);
+                return (
+                  <div key={pl.id} style={{ display: "grid", gap: 10 }}>
+                    <div style={{ fontWeight: 900 }}>{pl.name}</div>
+                    <div className="scoreAdjuster">
+                      <button
+                        type="button"
+                        className="scoreAdjBtn"
+                        aria-label="Subtract one stroke"
+                        disabled={display <= SCORE_STRIP_MIN}
+                        onClick={() => adjustHoleScore(pl.id, holeNum, -1)}
+                      >
+                        −
+                      </button>
+                      <div className="scoreAdjVal" aria-live="polite">
+                        {display}
+                      </div>
+                      <button
+                        type="button"
+                        className="scoreAdjBtn"
+                        aria-label="Add one stroke"
+                        disabled={display >= SCORE_STRIP_MAX}
+                        onClick={() => adjustHoleScore(pl.id, holeNum, 1)}
+                      >
+                        +
+                      </button>
+                    </div>
+                    <div style={{ display: "flex", gap: 10 }}>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setHoleScore(pl.id, holeNum, parForHole(holeNum))}
+                      >
+                        Set par
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setHoleScore(pl.id, holeNum, SCORE_STRIP_MIN)}
+                      >
+                        Min
+                      </button>
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => setHoleScore(pl.id, holeNum, SCORE_STRIP_MAX)}
+                      >
+                        Max
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="muted" style={{ fontSize: 12, marginTop: 14 }}>
+                Score is stored locally in your browser for this prototype screen.
+              </div>
+            </div>
+          </div>
         </div>
-      </div>
+      ) : null}
     </div>
   );
 }
