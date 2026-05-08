@@ -6,7 +6,8 @@ import re
 from typing import Any
 
 import anthropic
-from shapely.geometry import LineString, Point
+from shapely.geometry import LineString, Point, shape
+from shapely.ops import nearest_points, unary_union
 
 from .routes_caddie_compat import haversine_yards
 
@@ -79,6 +80,72 @@ def extract_hole_path_coords_lon_lat(features: dict[str, Any]) -> list[tuple[flo
     return out
 
 
+def _features_union(features: dict[str, Any], golf: str) -> Any | None:
+    polys: list[Any] = []
+    for feat in features.get("features") or []:
+        if (feat.get("properties") or {}).get("golf") != golf:
+            continue
+        g = feat.get("geometry")
+        if not g:
+            continue
+        try:
+            polys.append(shape(g))
+        except Exception:
+            continue
+    if not polys:
+        return None
+    try:
+        return unary_union(polys)
+    except Exception:
+        return None
+
+
+def _snap_to_union_nearest(lat: float, lon: float, union_geom: Any) -> tuple[float, float] | None:
+    try:
+        p = Point(lon, lat)
+        a, b = nearest_points(union_geom, p)
+        return (float(a.y), float(a.x))  # nearest point on union (a)
+    except Exception:
+        return None
+
+
+def _lerp_lat_lon(lat1: float, lon1: float, lat2: float, lon2: float, t: float) -> tuple[float, float]:
+    tt = float(min(max(t, 0.0), 1.0))
+    return (lat1 + tt * (lat2 - lat1), lon1 + tt * (lon2 - lon1))
+
+
+def _line_respects_fairway_corridor(
+    player_lat: float,
+    player_lon: float,
+    target_lat: float,
+    target_lon: float,
+    fairway_union: Any,
+    *,
+    max_off_fairway_yd: float = 18.0,
+    samples: int = 9,
+) -> bool:
+    """Without explicit tree data, approximate 'don't go over trees' by keeping the shot line near fairway.
+
+    We sample points along the straight shot line; if any point is far from the nearest fairway polygon
+    (beyond max_off_fairway_yd), we treat the line as an unrealistic corner-cut.
+    """
+    if fairway_union is None or getattr(fairway_union, "is_empty", True):
+        return True
+    n = max(3, int(samples))
+    for i in range(1, n):
+        t = i / n
+        lat, lon = _lerp_lat_lon(player_lat, player_lon, target_lat, target_lon, t)
+        try:
+            p = Point(float(lon), float(lat))
+            a, _b = nearest_points(fairway_union, p)
+            d = haversine_yards(float(lat), float(lon), float(a.y), float(a.x))
+        except Exception:
+            continue
+        if d > float(max_off_fairway_yd):
+            return False
+    return True
+
+
 TARGET_AGENT_SYSTEM = (
     "You are a PGA-level course-management agent. Choose where the app's white target marker should sit for the "
     "PLAYER'S NEXT swing so routing is realistic and sensible.\n"
@@ -92,6 +159,9 @@ TARGET_AGENT_SYSTEM = (
     "when possible (~70–115 yd feel via t).\n"
     "- Short approach: green_aim_mode true — sit near green toward safe side vs bunkers in intel (~t 0.95–1.0).\n"
     "- Par 3 from tee: green_aim_mode true, small offset away from bunker side.\n\n"
+    "- IMPORTANT: when green_aim_mode is false, the marker must land in/near the FAIRWAY (or along the hole centerline) "
+    "and the straight shot line from ball→marker should stay in the fairway corridor — do not pick a shortcut line over "
+    "untagged trees.\n\n"
     "Respond with ONLY a compact JSON object, no prose or markdown fences:\n"
     "{\n"
     '  "green_aim_mode": boolean,\n'
@@ -253,6 +323,9 @@ def finalize_target_coordinates(
 
     off_m = max(-49.0, min(49.0, off_y * 0.9144))
 
+    fairway_union = _features_union(hole_features, "fairway")
+    green_union = _features_union(hole_features, "green")
+
     if green_mode:
         t_eff = float(min(max(t, 0.88), 0.997))
         off_m_green = max(-44.0, min(44.0, off_m))
@@ -264,11 +337,42 @@ def finalize_target_coordinates(
             cand_lat, cand_lon = point_ball_to_green_with_offset(
                 player_lat, player_lon, gc_lat, gc_lon, 0.985, offset_right_m=off_m_green * 0.6
             )
+        # If we have a green polygon, always snap onto it (trees aren't tagged, but green usually is).
+        if green_union is not None and not green_union.is_empty:
+            snapped_green = _snap_to_union_nearest(cand_lat, cand_lon, green_union)
+            if snapped_green:
+                cand_lat, cand_lon = snapped_green
     else:
-        t_eff = float(min(max(t, 0.08), 0.965))
+        base_t = float(min(max(t, 0.08), 0.965))
         cand_lat, cand_lon = point_ball_to_green_with_offset(
-            player_lat, player_lon, gc_lat, gc_lon, t_eff, offset_right_m=off_m
+            player_lat, player_lon, gc_lat, gc_lon, base_t, offset_right_m=off_m
         )
+        # If we have fairway polygons, keep BOTH the marker and the shot line in a fairway corridor.
+        if fairway_union is not None and not fairway_union.is_empty:
+            for k in range(0, 7):
+                # Back off toward the player if the line corner-cuts outside fairway.
+                t_eff = max(0.14, base_t * (0.88**k))
+                cand_lat, cand_lon = point_ball_to_green_with_offset(
+                    player_lat, player_lon, gc_lat, gc_lon, t_eff, offset_right_m=off_m
+                )
+                try:
+                    inside = bool(fairway_union.contains(Point(cand_lon, cand_lat)))
+                except Exception:
+                    inside = False
+                if not inside:
+                    snapped_fw = _snap_to_union_nearest(cand_lat, cand_lon, fairway_union)
+                    if snapped_fw:
+                        cand_lat, cand_lon = snapped_fw
+                if _line_respects_fairway_corridor(
+                    player_lat,
+                    player_lon,
+                    cand_lat,
+                    cand_lon,
+                    fairway_union,
+                    max_off_fairway_yd=18.0,
+                    samples=9,
+                ):
+                    break
 
     path = extract_hole_path_coords_lon_lat(hole_features)
     snapped = _nearest_on_hole_coords(cand_lat, cand_lon, path)
