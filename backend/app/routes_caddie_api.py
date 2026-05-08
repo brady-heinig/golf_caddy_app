@@ -21,12 +21,9 @@ from .caddie_shot_intel import (
     resolve_intended_landing,
 )
 from .caddie_target_agent import (
-    build_facts_payload,
     center_target_in_fairway,
-    compact_intel_slice,
     finalize_target_coordinates,
     point_ball_to_green_with_offset,
-    run_white_target_agent,
 )
 from .elevenlabs_tts import synthesize_speech_mp3
 from .legacy import course_data as course_data_mod
@@ -95,7 +92,7 @@ class SuggestTargetOut(BaseModel):
     target_lat: float
     target_lon: float
     rationale_short: str | None = None
-    used_agent: bool = True
+    used_agent: bool = False  # Legacy field; LLM map target agent removed — always heuristic.
 
 
 def _get_user_settings(conn: psycopg.Connection, user_id: int) -> dict[str, Any]:
@@ -188,7 +185,7 @@ def caddie_suggest_target(
     user: Annotated[dict, Depends(get_current_user)],
     conn: Annotated[psycopg.Connection, Depends(get_conn)],
 ) -> SuggestTargetOut:
-    """Anthropic-powered placement of white map target before caddie advice runs."""
+    """Deterministic placement of white map target (intended landing + par-3/tee heuristics; no LLM)."""
     uid = int(user["id"])
     s = _get_user_settings(conn, uid)
     hcp = float(s["handicap_index"])
@@ -226,11 +223,8 @@ def caddie_suggest_target(
     hole = payload["hole"]
     gc = hole["green_center"]
     gclat, gclon = float(gc["lat"]), float(gc["lon"])
-    tee = hole["tee"]
-    tlat, tlon = float(tee["lat"]), float(tee["lon"])
     metrics = payload["metrics"]
     dist_pin = float(metrics.get("distance_yd") or 0.0)
-    plays_like = float(metrics.get("plays_like_yd") or dist_pin)
 
     fb_lat, fb_lon, fb_meta = resolve_intended_landing(
         body.player_lat,
@@ -289,8 +283,7 @@ def caddie_suggest_target(
         rat = str(parsed_p3.get("rationale_short") or "").strip()[:300] or None
         return SuggestTargetOut(target_lat=glat, target_lon=glon, rationale_short=rat, used_agent=False)
 
-    # Deterministic shortcut for clearly-open tee shots: if driver landing appears wide/clear,
-    # set the marker there so the agent doesn't invent a conservative layup on open holes.
+    # Deterministic shortcut for clearly-open tee shots on par 4/5.
     try:
         pp = intel.get("player_position") or {}
         near_tee_box = bool(pp.get("near_tee_box"))
@@ -354,86 +347,12 @@ def caddie_suggest_target(
                 used_agent=False,
             )
 
-    facts = build_facts_payload(
-        hole_par=int(hole.get("par") or 4),
-        card_yards=hole.get("yards"),
-        player_lat=body.player_lat,
-        player_lon=body.player_lon,
-        gc_lat=gclat,
-        gc_lon=gclon,
-        tee_lat=tlat,
-        tee_lon=tlon,
-        plays_like_yds=plays_like,
-        straight_pin_yds=dist_pin,
-        lie=str(lie_auto).lower(),
-        bag=bag,
-        handicap=hcp,
-        intel_compressed=compact_intel_slice(intel),
+    return SuggestTargetOut(
+        target_lat=fb_lat,
+        target_lon=fb_lon,
+        rationale_short=None,
+        used_agent=False,
     )
-
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return SuggestTargetOut(
-            target_lat=fb_lat,
-            target_lon=fb_lon,
-            rationale_short=None,
-            used_agent=False,
-        )
-
-    model = os.environ.get("ANTHROPIC_CADDIE_TARGET_MODEL") or os.environ.get(
-        "ANTHROPIC_CADDIE_MODEL", "claude-haiku-4-5"
-    )
-
-    try:
-        client = anthropic.Anthropic(api_key=api_key)
-        parsed = run_white_target_agent(client=client, model=model, facts_json=facts)
-        cr = (intel.get("club_recommendation") or {}) if isinstance(intel, dict) else {}
-        pp = (intel.get("player_position") or {}) if isinstance(intel, dict) else {}
-        aggressive = (
-            bool(cr.get("go_for_it"))
-            and not bool(cr.get("positional_play_to_landing"))
-            and bool(pp.get("near_tee_box"))
-            and int(hole.get("par") or 4) >= 4
-        )
-        # When go-for-it is true on a wide-open tee shot, allow the marker and line to live off fairway a bit
-        # (e.g. open right rough) so we don't force a conservative layup just because trees aren't tagged.
-        max_off_fw = 42.0 if aggressive else 18.0
-        tlat_out, tlon_out = finalize_target_coordinates(
-            parsed,
-            player_lat=body.player_lat,
-            player_lon=body.player_lon,
-            gc_lat=gclat,
-            gc_lon=gclon,
-            hole_features=features,
-            fallback_lat=fb_lat,
-            fallback_lon=fb_lon,
-            max_off_fairway_yd=max_off_fw,
-        )
-        rationale = parsed.get("rationale_short")
-        rationale_s = str(rationale).strip()[:300] if rationale is not None else None
-        if aggressive or (near_tee_box and par_int >= 4):
-            centered = center_target_in_fairway(
-                features=features,
-                player_lat=body.player_lat,
-                player_lon=body.player_lon,
-                target_lat=float(tlat_out),
-                target_lon=float(tlon_out),
-            )
-            if centered:
-                tlat_out, tlon_out = centered
-        return SuggestTargetOut(
-            target_lat=tlat_out,
-            target_lon=tlon_out,
-            rationale_short=rationale_s or None,
-            used_agent=True,
-        )
-    except Exception:
-        return SuggestTargetOut(
-            target_lat=fb_lat,
-            target_lon=fb_lon,
-            rationale_short=None,
-            used_agent=False,
-        )
 
 
 @router.post("/advice", response_model=CaddieAdviceOut)
