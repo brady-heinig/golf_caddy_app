@@ -8,27 +8,17 @@ from typing import Annotated, Any
 import anthropic
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
+from shapely.geometry import LineString, Point
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from .caddie_advice_context import build_caddie_advice_context
 from .caddie_lie_detect import classify_lie_from_blue_dot
-from .caddie_shot_intel import (
-    _distinct_bag_carries_desc,
-    fairway_width_at_landing_yds,
-    gather_shot_intel,
-    hazards_along_corridor,
-    resolve_intended_landing,
-)
-from .caddie_target_agent import (
-    center_target_in_fairway,
-    finalize_target_coordinates,
-    point_ball_to_green_with_offset,
-)
+from .caddie_shot_intel import gather_shot_intel, resolve_intended_landing
 from .elevenlabs_tts import synthesize_speech_mp3
 from .legacy import course_data as course_data_mod
 from .legacy import course_features
-from .routes_caddie_compat import get_course, get_hole, get_plays_like_path, haversine_yards, list_courses
+from .routes_caddie_compat import get_course, get_hole, get_plays_like_path, list_courses
 from .bag_selection import (
     normalize_shot_shapes,
     pick_club_for_plays_like_yards,
@@ -119,16 +109,39 @@ def _validate_bend(body: CaddieAdviceIn) -> None:
         )
 
 
-def _par3_green_offset_right_yds(intel: dict[str, Any]) -> float:
-    """Lateral yards (right-positive for right-handed golfer) nudging aim away from bunkers on tee line."""
-    off = 0.0
-    for b in (intel.get("bunkers_near_tee_shot_corridor") or [])[:10]:
-        s = str((b.get("side") or "")).lower()
-        if "left" in s:
-            off += 8.0
-        elif "right" in s:
-            off -= 8.0
-    return max(-22.0, min(22.0, off))
+def _extract_osm_hole_path_lon_lat(features: dict[str, Any]) -> list[tuple[float, float]]:
+    """Hole centerline from OSM (`golf=hole`) as (lon, lat) vertices."""
+    out: list[tuple[float, float]] = []
+    for feat in features.get("features") or []:
+        if (feat.get("properties") or {}).get("golf") != "hole":
+            continue
+        g = feat.get("geometry") or {}
+        gt = g.get("type")
+        coords = g.get("coordinates") or []
+        if gt == "LineString":
+            out.extend([(float(c[0]), float(c[1])) for c in coords])
+        elif gt == "MultiLineString" and coords:
+            for linestring in coords:
+                for pt in linestring:
+                    out.append((float(pt[0]), float(pt[1])))
+        break
+    return out
+
+
+def _snap_lat_lon_to_osm_hole_line(
+    lat: float, lon: float, features: dict[str, Any]
+) -> tuple[float, float] | None:
+    """Project a point onto the mapped OSM hole line (keeps the bend on the same polyline as the map)."""
+    path = _extract_osm_hole_path_lon_lat(features)
+    if len(path) < 2:
+        return None
+    try:
+        line = LineString(path)
+        p = Point(float(lon), float(lat))
+        near = line.interpolate(line.project(p))
+        return (float(near.y), float(near.x))
+    except Exception:
+        return None
 
 
 @router.get("/courses")
@@ -185,13 +198,11 @@ def caddie_suggest_target(
     user: Annotated[dict, Depends(get_current_user)],
     conn: Annotated[psycopg.Connection, Depends(get_conn)],
 ) -> SuggestTargetOut:
-    """Deterministic placement of white map target (intended landing + par-3/tee heuristics; no LLM)."""
+    """Heuristic landing from `resolve_intended_landing`, snapped onto the OSM hole centerline when present."""
     uid = int(user["id"])
     s = _get_user_settings(conn, uid)
     hcp = float(s["handicap_index"])
     bag = dict(s["bag"] or {})
-    shot_shapes_store = s.get("shot_shapes") or {}
-    shot_shapes_norm = normalize_shot_shapes(shot_shapes_store if isinstance(shot_shapes_store, dict) else {})
 
     course = course_data_mod.COURSES.get(body.course_id)
     if not course:
@@ -226,7 +237,7 @@ def caddie_suggest_target(
     metrics = payload["metrics"]
     dist_pin = float(metrics.get("distance_yd") or 0.0)
 
-    fb_lat, fb_lon, fb_meta = resolve_intended_landing(
+    fb_lat, fb_lon, _fb_meta = resolve_intended_landing(
         body.player_lat,
         body.player_lon,
         gclat,
@@ -239,113 +250,11 @@ def caddie_suggest_target(
         dist_pin,
     )
 
-    features = payload["features"]
-    intel = gather_shot_intel(
-        hole=hole,
-        features=features,
-        player_lat=body.player_lat,
-        player_lon=body.player_lon,
-        landing_lat=fb_lat,
-        landing_lon=fb_lon,
-        landing_meta=dict(fb_meta),
-        bag=bag,
-        lie=lie_auto,
-        metrics=metrics,
-        shot_shapes=shot_shapes_norm,
-        lie_detect_detail=lie_meta,
-        handicap=hcp,
-    )
-
-    try:
-        par_int = int(hole.get("par") or 4)
-    except (TypeError, ValueError):
-        par_int = 4
-
-    if par_int == 3:
-        off_y = _par3_green_offset_right_yds(intel if isinstance(intel, dict) else {})
-        parsed_p3 = {
-            "green_aim_mode": True,
-            "t_along_ball_to_green_center": 0.97,
-            "offset_right_yards": off_y,
-            "rationale_short": "Par 3: marker on green (avoid short fairway lines).",
-        }
-        glat, glon = finalize_target_coordinates(
-            parsed_p3,
-            player_lat=body.player_lat,
-            player_lon=body.player_lon,
-            gc_lat=gclat,
-            gc_lon=gclon,
-            hole_features=features,
-            fallback_lat=fb_lat,
-            fallback_lon=fb_lon,
-            max_off_fairway_yd=18.0,
-        )
-        rat = str(parsed_p3.get("rationale_short") or "").strip()[:300] or None
-        return SuggestTargetOut(target_lat=glat, target_lon=glon, rationale_short=rat, used_agent=False)
-
-    # Deterministic shortcut for clearly-open tee shots on par 4/5.
-    try:
-        pp = intel.get("player_position") or {}
-        near_tee_box = bool(pp.get("near_tee_box"))
-    except Exception:
-        near_tee_box = False
-
-    carries_desc = _distinct_bag_carries_desc(bag)
-    if near_tee_box and par_int >= 4 and carries_desc and dist_pin > 120:
-        # Tee shots: among every club carried (driver → woods/hybrids → irons), choose the farthest *safe*
-        # landing (~high-percentage carry fractions), centered in fairway.
-        best: tuple[float, float] | None = None
-        best_dist = -1.0
-        fracs = (0.97, 0.94, 0.91, 0.88, 0.85, 0.82, 0.79, 0.76)
-        for club_carry in carries_desc:
-            for frac in fracs:
-                t_try = min(
-                    0.92,
-                    max(0.15, (float(club_carry) * float(frac)) / max(float(dist_pin), 1.0)),
-                )
-                cand_lat, cand_lon = point_ball_to_green_with_offset(
-                    body.player_lat, body.player_lon, gclat, gclon, t_try, offset_right_m=0.0
-                )
-                centered = center_target_in_fairway(
-                    features=features,
-                    player_lat=body.player_lat,
-                    player_lon=body.player_lon,
-                    target_lat=float(cand_lat),
-                    target_lon=float(cand_lon),
-                )
-                if centered:
-                    cand_lat, cand_lon = centered
-
-                fw_drv = fairway_width_at_landing_yds(features, body.player_lat, body.player_lon, cand_lat, cand_lon)
-                inside = bool((fw_drv or {}).get("landing_inside_fairway_polygon")) if fw_drv else False
-                width = (fw_drv or {}).get("width_yds") if fw_drv else None
-                if not inside:
-                    continue
-                if width is not None and float(width) < 22.0:
-                    continue
-                trouble_drv = hazards_along_corridor(
-                    features,
-                    body.player_lat,
-                    body.player_lon,
-                    cand_lat,
-                    cand_lon,
-                    ("water_hazard", "lateral_water_hazard", "out_of_bounds"),
-                    cross_max_yds=70.0,
-                )
-                if trouble_drv:
-                    continue
-                d = float(haversine_yards(body.player_lat, body.player_lon, cand_lat, cand_lon))
-                if d > best_dist:
-                    best_dist = d
-                    best = (float(cand_lat), float(cand_lon))
-
-        if best is not None:
-            return SuggestTargetOut(
-                target_lat=best[0],
-                target_lon=best[1],
-                rationale_short="Auto target: farthest safe tee shot (fairway-centered).",
-                used_agent=False,
-            )
+    features_fc = payload.get("features") or {}
+    if isinstance(features_fc, dict):
+        snapped = _snap_lat_lon_to_osm_hole_line(fb_lat, fb_lon, features_fc)
+        if snapped is not None:
+            fb_lat, fb_lon = snapped
 
     return SuggestTargetOut(
         target_lat=fb_lat,
