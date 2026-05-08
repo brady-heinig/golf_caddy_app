@@ -107,6 +107,94 @@ def _features_union(features: dict[str, Any], golf: str) -> Any | None:
         return None
 
 
+def _collect_golf_polygons(features: dict[str, Any], golf: str) -> list[Any]:
+    """Explode MultiPolygon OSM greens/fairways into individual Polygon parts."""
+    out: list[Any] = []
+    for feat in features.get("features") or []:
+        if (feat.get("properties") or {}).get("golf") != golf:
+            continue
+        g = feat.get("geometry")
+        if not g:
+            continue
+        try:
+            s = shape(g)
+        except Exception:
+            continue
+        if getattr(s, "is_empty", True):
+            continue
+        if s.geom_type == "Polygon":
+            out.append(s)
+        elif s.geom_type == "MultiPolygon":
+            for part in s.geoms:
+                if getattr(part, "is_empty", True):
+                    continue
+                out.append(part)
+    return out
+
+
+def _geom_min_dist_yds_to_point(geom: Any, lat: float, lon: float) -> float:
+    """Haversine yards from lat/lon to nearest point on polygon boundary (0 if inside/covered)."""
+    try:
+        p = Point(float(lon), float(lat))
+        if geom.covers(p):
+            return 0.0
+        a, _b = nearest_points(geom, p)
+        return float(haversine_yards(lat, lon, float(a.y), float(a.x)))
+    except Exception:
+        return float("inf")
+
+
+def primary_green_geometry_for_hole(
+    features: dict[str, Any],
+    gc_lat: float,
+    gc_lon: float,
+    *,
+    max_near_center_yd: float = 52.0,
+    clear_second_gap_yd: float = 14.0,
+    loose_max_first_yd: float = 110.0,
+    loose_gap_yd: float = 28.0,
+) -> Any | None:
+    """Drop OSM polygons tagged golf=green that are not tied to this hole's official green_center.
+
+    Course data picks the scoring green; stray shapes (temporary greens, tees, mowing errors, etc.)
+    stay out of unary_union snapping so targets don't steer to the wrong surface.
+    """
+    polys = _collect_golf_polygons(features, "green")
+    if not polys:
+        return None
+    p_gc = Point(float(gc_lon), float(gc_lat))
+    containing: list[Any] = []
+    for g in polys:
+        try:
+            if g.covers(p_gc):
+                containing.append(g)
+        except Exception:
+            continue
+    if len(containing) == 1:
+        return containing[0]
+    if len(containing) > 1:
+        try:
+            return unary_union(containing)
+        except Exception:
+            return containing[0]
+
+    scored = [(_geom_min_dist_yds_to_point(g, gc_lat, gc_lon), g) for g in polys]
+    scored.sort(key=lambda x: x[0])
+    d0, g0 = scored[0]
+    if math.isinf(d0):
+        return None
+    if len(scored) == 1:
+        return g0
+
+    d1 = scored[1][0]
+    if d0 <= max_near_center_yd and (d1 - d0) >= clear_second_gap_yd:
+        return g0
+    if d0 <= loose_max_first_yd and (d1 - d0) >= loose_gap_yd:
+        return g0
+    # Ambiguous clustering: still prefer geometry closest to the scorecard green center over unioning extras.
+    return g0
+
+
 def _snap_to_union_nearest(lat: float, lon: float, union_geom: Any) -> tuple[float, float] | None:
     try:
         p = Point(lon, lat)
@@ -436,7 +524,9 @@ def finalize_target_coordinates(
     off_m = max(-49.0, min(49.0, off_y * 0.9144))
 
     fairway_union = _features_union(hole_features, "fairway")
-    green_union = _features_union(hole_features, "green")
+    green_union = primary_green_geometry_for_hole(hole_features, gc_lat, gc_lon)
+    if green_union is None:
+        green_union = _features_union(hole_features, "green")
 
     def _dist_to_fairway_yd(llat: float, llon: float) -> float | None:
         if fairway_union is None or getattr(fairway_union, "is_empty", True):

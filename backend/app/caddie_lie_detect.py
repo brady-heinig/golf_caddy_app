@@ -7,6 +7,7 @@ from typing import Any
 from shapely.geometry import Point, shape
 from shapely.ops import transform, unary_union
 
+from .caddie_target_agent import primary_green_geometry_for_hole
 from .routes_caddie_compat import haversine_yards
 
 
@@ -98,7 +99,15 @@ def classify_lie_from_blue_dot(
         if d_tee <= tee_marker_max_yds:
             return "tee", {**meta, "detail": "near_tee_marker", "distance_yds_from_marker": round(d_tee, 1)}
 
-    green_u = _union_golf(features, "green")
+    gc_ll = hole.get("green_center") or {}
+    gclat, gclon = gc_ll.get("lat"), gc_ll.get("lon")
+    green_u = (
+        primary_green_geometry_for_hole(features, float(gclat), float(gclon))
+        if gclat is not None and gclon is not None
+        else None
+    )
+    if green_u is None:
+        green_u = _union_golf(features, "green")
     if green_u is not None:
         try:
             gx = _geom_to_xy_m(green_u, plat, plon)
