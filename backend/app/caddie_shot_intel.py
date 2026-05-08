@@ -69,6 +69,33 @@ def _driver_or_longest_wood_yds(bag: dict[str, Any]) -> float | None:
     return top if top > 120 else None
 
 
+def _distinct_bag_carries_desc(bag: dict[str, Any], *, min_yd: float = 95.0) -> list[float]:
+    """Distinct listed carries from the bag, longest first (for tee-shot geometry probes).
+
+    Includes driver, fairway woods/hybrids, and irons; drops very short wedges by default.
+    """
+    raw: list[float] = []
+    for _k, v in (bag or {}).items():
+        try:
+            yd = float(v)
+        except (TypeError, ValueError):
+            continue
+        if yd < min_yd:
+            continue
+        raw.append(yd)
+    if not raw:
+        return []
+    seen: set[int] = set()
+    out: list[float] = []
+    for y in sorted(raw, reverse=True):
+        key = int(round(y))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(y)
+    return out
+
+
 def resolve_intended_landing(
     player_lat: float,
     player_lon: float,
