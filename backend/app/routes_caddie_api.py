@@ -122,6 +122,18 @@ def _validate_bend(body: CaddieAdviceIn) -> None:
         )
 
 
+def _par3_green_offset_right_yds(intel: dict[str, Any]) -> float:
+    """Lateral yards (right-positive for right-handed golfer) nudging aim away from bunkers on tee line."""
+    off = 0.0
+    for b in (intel.get("bunkers_near_tee_shot_corridor") or [])[:10]:
+        s = str((b.get("side") or "")).lower()
+        if "left" in s:
+            off += 8.0
+        elif "right" in s:
+            off -= 8.0
+    return max(-22.0, min(22.0, off))
+
+
 @router.get("/courses")
 def caddie_list_courses() -> list[dict[str, Any]]:
     return list_courses()
@@ -250,15 +262,40 @@ def caddie_suggest_target(
         handicap=hcp,
     )
 
+    try:
+        par_int = int(hole.get("par") or 4)
+    except (TypeError, ValueError):
+        par_int = 4
+
+    if par_int == 3:
+        off_y = _par3_green_offset_right_yds(intel if isinstance(intel, dict) else {})
+        parsed_p3 = {
+            "green_aim_mode": True,
+            "t_along_ball_to_green_center": 0.97,
+            "offset_right_yards": off_y,
+            "rationale_short": "Par 3: marker on green (avoid short fairway lines).",
+        }
+        glat, glon = finalize_target_coordinates(
+            parsed_p3,
+            player_lat=body.player_lat,
+            player_lon=body.player_lon,
+            gc_lat=gclat,
+            gc_lon=gclon,
+            hole_features=features,
+            fallback_lat=fb_lat,
+            fallback_lon=fb_lon,
+            max_off_fairway_yd=18.0,
+        )
+        rat = str(parsed_p3.get("rationale_short") or "").strip()[:300] or None
+        return SuggestTargetOut(target_lat=glat, target_lon=glon, rationale_short=rat, used_agent=False)
+
     # Deterministic shortcut for clearly-open tee shots: if driver landing appears wide/clear,
     # set the marker there so the agent doesn't invent a conservative layup on open holes.
     try:
         pp = intel.get("player_position") or {}
         near_tee_box = bool(pp.get("near_tee_box"))
-        par_int = int(hole.get("par") or 4)
     except Exception:
         near_tee_box = False
-        par_int = int(hole.get("par") or 4)
 
     carries_desc = _distinct_bag_carries_desc(bag)
     if near_tee_box and par_int >= 4 and carries_desc and dist_pin > 120:
@@ -504,6 +541,7 @@ def caddie_advice(
             user_line=user_line,
             client=client,
             model=model,
+            hole_par=int(hole.get("par") or 4),
         )
         assistant = f"{briefing}\n---\nSUMMARY: {summary_plain}"
     except Exception as e:

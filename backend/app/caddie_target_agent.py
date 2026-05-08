@@ -267,7 +267,9 @@ TARGET_AGENT_SYSTEM = (
     "- Fairway with long yards left (> fairway-wood carries for this bag): place marker so remainder is wedge/short iron "
     "when possible (~70–115 yd feel via t).\n"
     "- Short approach: green_aim_mode true — sit near green toward safe side vs bunkers in intel (~t 0.95–1.0).\n"
-    "- Par 3 from tee: green_aim_mode true, small offset away from bunker side.\n\n"
+    "- Par 3 (hole.par is 3): **always** green_aim_mode true. The marker must sit **on the green surface** "
+    "(t_along_ball_to_green_center usually 0.92–1.0; prefer green polygon snaps). Never a fairway/teed layup zone "
+    "short of the green; never describe or imply aiming up the tee fairway toward a non-green target.\n\n"
     "- IMPORTANT: when green_aim_mode is false, the marker must land in/near the FAIRWAY (or along the hole centerline) "
     "and the straight shot line from ball→marker should stay in the fairway corridor — do not pick a shortcut line over "
     "untagged trees.\n\n"
@@ -522,7 +524,14 @@ def finalize_target_coordinates(
         return True
 
     use_lat, use_lon = (cand_lat, cand_lon)
-    if snapped and fairway_union is not None and not fairway_union.is_empty:
+    # Ball→hole path snapping is for fairway routing only; replacing a green aim with the hole line
+    # pulls the marker off the putting surface (bad on par 3s and short approaches).
+    if (
+        not green_mode
+        and snapped
+        and fairway_union is not None
+        and not fairway_union.is_empty
+    ):
         # Only snap to centerline if it doesn't reintroduce a corner-cut.
         if _two_leg_respects_corridor(
             player_lat,

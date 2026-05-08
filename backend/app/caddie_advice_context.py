@@ -269,4 +269,22 @@ def build_caddie_advice_context(
         "club_for_adjusted_plays_like (bag rule vs club_distance_basis_yds when positional layup). "
         "When positional_play_to_landing is true, target fairway/white-target carry — not driver-at-pin.",
     ]
+
+    try:
+        is_par_3 = int(hole.get("par") or 0) == 3
+    except (TypeError, ValueError):
+        is_par_3 = False
+    if is_par_3:
+        parts.extend(
+            [
+                "",
+                "=== PAR 3 — GREEN-ONLY AIM (mandatory) ===",
+                "Hole is par 3. Briefing AIM and SUMMARY aim must describe a target **on the green** ",
+                "(e.g., center/middle vs pin, shaded away from bunker or water guarding the putting surface).",
+                "Never aim the tee stroke up the tee fairway or at a landing short of the green unless STRUCTURED_SHOT_INTEL clearly indicates a sideways recovery (not tee attack). ",
+                "FAIRWAY line: irrelevant for tee-shot fairway corridors—use briefly only if discussing green apron/fringe ties to slope. ",
+                "GO_FOR_IT: phrase as committing to holding the putting surface versus a more conservative spot still on THE GREEN—not driver-at-pin-from-200-yards rhetoric.",
+            ]
+        )
+
     return "\n".join(parts)

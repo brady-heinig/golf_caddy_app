@@ -26,7 +26,8 @@ _LINE_HINTS: dict[str, str] = {
     ),
     "AIM": (
         "Start line and curve using shot_shape_from_settings.shape where relevant; "
-        "reference bunker/trouble sides from JSON; align with fairway landing."
+        "reference bunker/trouble sides from JSON; align aim with the structured landing target "
+        "(par 3 = on the green only; par 4/5 tee = fairway/white target when context says so)."
     ),
     "TROUBLE": (
         "From bunkers_near_tee_shot_corridor and major_trouble_near_corridor — what to avoid; "
@@ -61,6 +62,18 @@ CADDIE_BRIEFING_SYSTEM = (
     "Reply with EXACTLY eight lines and nothing else: no markdown code fences, no preamble, no trailing commentary. "
     "Each line starts with the exact label and a colon as shown, in the prescribed order. "
     "Keep each line to one sentence when possible."
+)
+
+_PAR3_ADVICE_SYSTEM_APPEND = (
+    "\n\nPar 3 overlay: When hole par is 3, every shot defaults to attacking **the green** "
+    "(putting surface or safe fringe as a green miss). AIM must name only an on-green aim—never a fairway layup short of the green on the tee shot. "
+    "FAIRWAY line: do not describe tee-shot fairway corridors; skip or tie only to green width/tiers if useful. "
+    "GO_FOR_IT / strategy: frame as taking on the green vs favoring a safer spot still on the green; avoid long-hole driver-at-pin distance tropes."
+)
+
+_PAR3_SUMMARY_SYSTEM_APPEND = (
+    "\nIf hole par is 3: aim only on the green (or green-side safe miss). Do not tell the player to aim up the fairway short of the green. "
+    "Skip or radically shorten any 'more than 200 yards from the hole' go-for-it boilerplate when the shot is a par-3 tee."
 )
 
 CADDIE_SUMMARY_SYSTEM = (
@@ -176,13 +189,20 @@ def run_caddie_advice_chain(
     user_line: str,
     client: anthropic.Anthropic,
     model: str,
+    hole_par: int | None = None,
 ) -> tuple[str, str]:
     """Two LLM calls: (1) eight labeled briefing lines, (2) spoken summary paragraph. Returns (briefing, summary_plain)."""
+    briefing_system = CADDIE_BRIEFING_SYSTEM
+    summary_system = CADDIE_SUMMARY_SYSTEM
+    if hole_par == 3:
+        briefing_system += _PAR3_ADVICE_SYSTEM_APPEND
+        summary_system += _PAR3_SUMMARY_SYSTEM_APPEND
+
     briefing_user = _build_briefing_user_message(ctx, user_line)
     briefing_raw = _call_text(
         client,
         model,
-        CADDIE_BRIEFING_SYSTEM,
+        briefing_system,
         briefing_user,
         max_tokens=900,
     )
@@ -195,7 +215,7 @@ def run_caddie_advice_chain(
         "Write the SUMMARY paragraph as specified in your system instructions.\n"
         f"HARD LIMIT REMINDER: paragraph after SUMMARY: ≤ {SUMMARY_MAX_CHARACTERS} characters."
     )
-    summary_raw = _call_text(client, model, CADDIE_SUMMARY_SYSTEM, summary_user, max_tokens=280)
+    summary_raw = _call_text(client, model, summary_system, summary_user, max_tokens=280)
     summary_plain = summary_plain_text(summary_raw)
 
     return briefing, summary_plain
