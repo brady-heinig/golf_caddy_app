@@ -146,6 +146,53 @@ def _line_respects_fairway_corridor(
     return True
 
 
+def _two_leg_respects_corridor(
+    player_lat: float,
+    player_lon: float,
+    bend_lat: float,
+    bend_lon: float,
+    gc_lat: float,
+    gc_lon: float,
+    fairway_union: Any,
+    *,
+    max_off_fairway_yd: float,
+    samples: int = 9,
+) -> bool:
+    """Ensure both ball→bend and bend→green legs don't 'cut corners' far from fairway.
+
+    For the approach (bend→green), allow leaving fairway near the end (last ~18% of samples)
+    since a proper approach often finishes on green.
+    """
+    if not _line_respects_fairway_corridor(
+        player_lat,
+        player_lon,
+        bend_lat,
+        bend_lon,
+        fairway_union,
+        max_off_fairway_yd=max_off_fairway_yd,
+        samples=samples,
+    ):
+        return False
+
+    if fairway_union is None or getattr(fairway_union, "is_empty", True):
+        return True
+    n = max(3, int(samples))
+    for i in range(1, n):
+        t = i / n
+        if t >= 0.82:
+            continue
+        lat, lon = _lerp_lat_lon(bend_lat, bend_lon, gc_lat, gc_lon, t)
+        try:
+            p = Point(float(lon), float(lat))
+            a, _b = nearest_points(fairway_union, p)
+            d = haversine_yards(float(lat), float(lon), float(a.y), float(a.x))
+        except Exception:
+            continue
+        if d > float(max_off_fairway_yd):
+            return False
+    return True
+
+
 TARGET_AGENT_SYSTEM = (
     "You are a PGA-level course-management agent. Choose where the app's white target marker should sit for the "
     "PLAYER'S NEXT swing so routing is realistic and sensible.\n"
@@ -360,34 +407,42 @@ def finalize_target_coordinates(
         )
         # If we have fairway polygons, keep BOTH the marker and the shot line in a fairway corridor.
         if fairway_union is not None and not fairway_union.is_empty:
-            for k in range(0, 7):
+            # If the agent picked an extreme lateral offset, dial it back until the routing is realistic.
+            off_seq = [off_m, off_m * 0.7, off_m * 0.45, off_m * 0.25, 0.0]
+            for off_try in off_seq:
+                for k in range(0, 7):
                 # Back off toward the player if the line corner-cuts outside fairway.
-                t_eff = max(0.14, base_t * (0.88**k))
-                cand_lat, cand_lon = point_ball_to_green_with_offset(
-                    player_lat, player_lon, gc_lat, gc_lon, t_eff, offset_right_m=off_m
-                )
-                try:
-                    inside = bool(fairway_union.contains(Point(cand_lon, cand_lat)))
-                except Exception:
-                    inside = False
-                if not inside:
-                    snapped_fw = _snap_to_union_nearest(cand_lat, cand_lon, fairway_union)
-                    if snapped_fw:
-                        cand_lat, cand_lon = snapped_fw
-                # If the marker is only slightly off fairway, allow it (wide-open rough right/left is often playable).
-                d_fw = _dist_to_fairway_yd(cand_lat, cand_lon)
-                if d_fw is not None and d_fw <= max_off_fairway_yd:
-                    inside = True
-                if _line_respects_fairway_corridor(
-                    player_lat,
-                    player_lon,
-                    cand_lat,
-                    cand_lon,
-                    fairway_union,
-                    max_off_fairway_yd=max_off_fairway_yd,
-                    samples=9,
-                ):
-                    break
+                    t_eff = max(0.14, base_t * (0.88**k))
+                    cand_lat, cand_lon = point_ball_to_green_with_offset(
+                        player_lat, player_lon, gc_lat, gc_lon, t_eff, offset_right_m=off_try
+                    )
+                    try:
+                        inside = bool(fairway_union.contains(Point(cand_lon, cand_lat)))
+                    except Exception:
+                        inside = False
+                    if not inside:
+                        snapped_fw = _snap_to_union_nearest(cand_lat, cand_lon, fairway_union)
+                        if snapped_fw:
+                            cand_lat, cand_lon = snapped_fw
+                    # If the marker is only slightly off fairway, allow it (wide-open rough right/left is often playable).
+                    d_fw = _dist_to_fairway_yd(cand_lat, cand_lon)
+                    if d_fw is not None and d_fw <= max_off_fairway_yd:
+                        inside = True
+                    if _two_leg_respects_corridor(
+                        player_lat,
+                        player_lon,
+                        cand_lat,
+                        cand_lon,
+                        gc_lat,
+                        gc_lon,
+                        fairway_union,
+                        max_off_fairway_yd=max_off_fairway_yd,
+                        samples=9,
+                    ):
+                        break
+                else:
+                    continue
+                break
 
     path = extract_hole_path_coords_lon_lat(hole_features)
     snapped = _nearest_on_hole_coords(cand_lat, cand_lon, path)
@@ -404,7 +459,21 @@ def finalize_target_coordinates(
             return False
         return True
 
-    use_lat, use_lon = (snapped if snapped else (cand_lat, cand_lon))
+    use_lat, use_lon = (cand_lat, cand_lon)
+    if snapped and fairway_union is not None and not fairway_union.is_empty:
+        # Only snap to centerline if it doesn't reintroduce a corner-cut.
+        if _two_leg_respects_corridor(
+            player_lat,
+            player_lon,
+            float(snapped[0]),
+            float(snapped[1]),
+            gc_lat,
+            gc_lon,
+            fairway_union,
+            max_off_fairway_yd=max_off_fairway_yd,
+            samples=9,
+        ):
+            use_lat, use_lon = float(snapped[0]), float(snapped[1])
     if not _ok(use_lat, use_lon):
         return (fallback_lat, fallback_lon)
     if not (-90 <= use_lat <= 90 and -180 <= use_lon <= 180):

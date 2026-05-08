@@ -321,15 +321,20 @@ code {
   justify-content: center;
   flex: 1 1 auto;
   min-height: 0;
+  /* Full-height, white “phone screen” for mode selection */
+  background: #ffffff;
+  color: var(--caddie-text);
+  padding: 0;
+  gap: 0;
 }
 
 .modePickerCard {
-  background: var(--caddie-card);
-  color: var(--caddie-text);
-  border-radius: 16px;
-  padding: 18px;
-  box-shadow: var(--caddie-shadow);
-  border: 1px solid rgba(0, 0, 0, 0.1);
+  background: transparent;
+  color: inherit;
+  border-radius: 0;
+  padding: 28px 18px;
+  box-shadow: none;
+  border: 0;
   text-align: center;
   width: 100%;
   box-sizing: border-box;

@@ -1372,7 +1372,6 @@ export function CaddieApp() {
               Simulated round
             </button>
           </div>
-          <p className="modePickerHint">You can allow location when prompted.</p>
         </div>
       </div>
     );
