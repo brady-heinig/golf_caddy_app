@@ -275,6 +275,17 @@ def caddie_suggest_target(
     try:
         client = anthropic.Anthropic(api_key=api_key)
         parsed = run_white_target_agent(client=client, model=model, facts_json=facts)
+        cr = (intel.get("club_recommendation") or {}) if isinstance(intel, dict) else {}
+        pp = (intel.get("player_position") or {}) if isinstance(intel, dict) else {}
+        aggressive = (
+            bool(cr.get("go_for_it"))
+            and not bool(cr.get("positional_play_to_landing"))
+            and bool(pp.get("near_tee_box"))
+            and int(hole.get("par") or 4) >= 4
+        )
+        # When go-for-it is true on a wide-open tee shot, allow the marker and line to live off fairway a bit
+        # (e.g. open right rough) so we don't force a conservative layup just because trees aren't tagged.
+        max_off_fw = 42.0 if aggressive else 18.0
         tlat_out, tlon_out = finalize_target_coordinates(
             parsed,
             player_lat=body.player_lat,
@@ -284,6 +295,7 @@ def caddie_suggest_target(
             hole_features=features,
             fallback_lat=fb_lat,
             fallback_lon=fb_lon,
+            max_off_fairway_yd=max_off_fw,
         )
         rationale = parsed.get("rationale_short")
         rationale_s = str(rationale).strip()[:300] if rationale is not None else None

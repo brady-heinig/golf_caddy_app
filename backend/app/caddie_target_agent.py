@@ -308,6 +308,7 @@ def finalize_target_coordinates(
     hole_features: dict[str, Any],
     fallback_lat: float,
     fallback_lon: float,
+    max_off_fairway_yd: float = 18.0,
 ) -> tuple[float, float]:
     gm = parsed.get("green_aim_mode")
     green_mode = gm is True or (isinstance(gm, str) and gm.strip().lower() in ("true", "yes"))
@@ -325,6 +326,16 @@ def finalize_target_coordinates(
 
     fairway_union = _features_union(hole_features, "fairway")
     green_union = _features_union(hole_features, "green")
+
+    def _dist_to_fairway_yd(llat: float, llon: float) -> float | None:
+        if fairway_union is None or getattr(fairway_union, "is_empty", True):
+            return None
+        try:
+            p = Point(float(llon), float(llat))
+            a, _b = nearest_points(fairway_union, p)
+            return float(haversine_yards(float(llat), float(llon), float(a.y), float(a.x)))
+        except Exception:
+            return None
 
     if green_mode:
         t_eff = float(min(max(t, 0.88), 0.997))
@@ -363,13 +374,17 @@ def finalize_target_coordinates(
                     snapped_fw = _snap_to_union_nearest(cand_lat, cand_lon, fairway_union)
                     if snapped_fw:
                         cand_lat, cand_lon = snapped_fw
+                # If the marker is only slightly off fairway, allow it (wide-open rough right/left is often playable).
+                d_fw = _dist_to_fairway_yd(cand_lat, cand_lon)
+                if d_fw is not None and d_fw <= max_off_fairway_yd:
+                    inside = True
                 if _line_respects_fairway_corridor(
                     player_lat,
                     player_lon,
                     cand_lat,
                     cand_lon,
                     fairway_union,
-                    max_off_fairway_yd=18.0,
+                    max_off_fairway_yd=max_off_fairway_yd,
                     samples=9,
                 ):
                     break
