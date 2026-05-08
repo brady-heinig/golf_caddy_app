@@ -356,6 +356,7 @@ def finalize_target_coordinates(
     fallback_lat: float,
     fallback_lon: float,
     max_off_fairway_yd: float = 18.0,
+    force_centerline: bool = False,
 ) -> tuple[float, float]:
     gm = parsed.get("green_aim_mode")
     green_mode = gm is True or (isinstance(gm, str) and gm.strip().lower() in ("true", "yes"))
@@ -370,6 +371,8 @@ def finalize_target_coordinates(
         off_y = 0.0
 
     off_m = max(-49.0, min(49.0, off_y * 0.9144))
+    if force_centerline:
+        off_m = 0.0
 
     fairway_union = _features_union(hole_features, "fairway")
     green_union = _features_union(hole_features, "green")
@@ -462,18 +465,33 @@ def finalize_target_coordinates(
     use_lat, use_lon = (cand_lat, cand_lon)
     if snapped and fairway_union is not None and not fairway_union.is_empty:
         # Only snap to centerline if it doesn't reintroduce a corner-cut.
-        if _two_leg_respects_corridor(
-            player_lat,
-            player_lon,
-            float(snapped[0]),
-            float(snapped[1]),
-            gc_lat,
-            gc_lon,
-            fairway_union,
-            max_off_fairway_yd=max_off_fairway_yd,
-            samples=9,
-        ):
-            use_lat, use_lon = float(snapped[0]), float(snapped[1])
+        if force_centerline:
+            # Tee-shot: aim middle of fairway (centerline) when feasible.
+            if _two_leg_respects_corridor(
+                player_lat,
+                player_lon,
+                float(snapped[0]),
+                float(snapped[1]),
+                gc_lat,
+                gc_lon,
+                fairway_union,
+                max_off_fairway_yd=max_off_fairway_yd,
+                samples=9,
+            ):
+                use_lat, use_lon = float(snapped[0]), float(snapped[1])
+        else:
+            if _two_leg_respects_corridor(
+                player_lat,
+                player_lon,
+                float(snapped[0]),
+                float(snapped[1]),
+                gc_lat,
+                gc_lon,
+                fairway_union,
+                max_off_fairway_yd=max_off_fairway_yd,
+                samples=9,
+            ):
+                use_lat, use_lon = float(snapped[0]), float(snapped[1])
     if not _ok(use_lat, use_lon):
         return (fallback_lat, fallback_lon)
     if not (-90 <= use_lat <= 90 and -180 <= use_lon <= 180):

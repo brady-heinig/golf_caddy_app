@@ -340,6 +340,7 @@ def caddie_suggest_target(
             fallback_lat=fb_lat,
             fallback_lon=fb_lon,
             max_off_fairway_yd=max_off_fw,
+            force_centerline=bool(near_tee_box and int(hole.get("par") or 4) >= 4),
         )
         rationale = parsed.get("rationale_short")
         rationale_s = str(rationale).strip()[:300] if rationale is not None else None
