@@ -727,7 +727,7 @@ export function CaddieApp() {
     window.speechSynthesis.speak(u);
   }, [caddieSummary]);
 
-  const fetchCaddieAdvice = useCallback(async () => {
+  const fetchCaddieAdvice = useCallback(async (opts?: { suggestTarget?: boolean }) => {
     const pos = effectivePos;
     if (!pos) {
       setCaddieErr(
@@ -742,6 +742,36 @@ export function CaddieApp() {
     setCaddieLoading(true);
     setCaddieErr(null);
     try {
+      const suggestFirst = opts?.suggestTarget ?? true;
+      if (suggestFirst) {
+        try {
+          const sr = await fetch("/api/caddie/suggest-target", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              course_id: courseId,
+              hole_number: holeNum,
+              player_lat: pos.lat,
+              player_lon: pos.lon,
+            }),
+          });
+          const sj = (await sr.json().catch(() => ({}))) as {
+            target_lat?: unknown;
+            target_lon?: unknown;
+            used_agent?: unknown;
+          };
+          const tlat = Number(sj.target_lat);
+          const tlon = Number(sj.target_lon);
+          const usedAgent = sj.used_agent !== false;
+          if (sr.ok && usedAgent && Number.isFinite(tlat) && Number.isFinite(tlon)) {
+            approachBendUserDraggedRef.current = true;
+            mapInteractionRef.current?.updateDyn({ lat: tlat, lon: tlon });
+          }
+        } catch {
+          /* keep current white marker */
+        }
+      }
+
       const bend = bendMapRef.current;
       const body: Record<string, unknown> = {
         course_id: courseId,
@@ -783,7 +813,7 @@ export function CaddieApp() {
 
   useEffect(() => {
     if (!showCaddieAdvice) return;
-    void fetchCaddieAdvice();
+    void fetchCaddieAdvice({ suggestTarget: true });
   }, [showCaddieAdvice, fetchCaddieAdvice]);
 
   const talkWithCaddie = () => {
@@ -1123,7 +1153,7 @@ export function CaddieApp() {
           mets?.plays_like_yd != null && Number.isFinite(Number(mets.plays_like_yd))
             ? Number(mets.plays_like_yd)
             : haversineYards(startNow, end);
-        if (pinPlays > APPROACH_PIN_BEND_MAX_YD) approachBendUserDraggedRef.current = false;
+        // Keep bend when user dragged or caddie agent placed it; only reset on hole/course change (see effect).
         const bendForLine: LL = pinPlays <= APPROACH_PIN_BEND_MAX_YD && !approachBendUserDraggedRef.current ? end : bend;
         bendMapRef.current = bendForLine;
         const autoApproachHideYardChips = pinPlays <= APPROACH_PIN_BEND_MAX_YD && !approachBendUserDraggedRef.current;
@@ -1318,12 +1348,15 @@ export function CaddieApp() {
     if (!m.isStyleLoaded()) m.once("load", runHoleSetup);
     else runHoleSetup();
 
+    // liveGps intentionally omitted from deps below: GPS updates use a separate effect so the white target is not rebuilt every tick.
+
     return () => {
       cancelled = true;
       m.off("load", runHoleSetup);
       teardown?.();
     };
-  }, [hole, holeNum, roundMode, courseId, liveGps]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- liveGps omitted; see comment before return
+  }, [hole, holeNum, roundMode, courseId]);
 
   if (roundMode == null) {
     return (
@@ -1561,7 +1594,12 @@ export function CaddieApp() {
                     >
                       Device voice
                     </button>
-                    <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()} disabled={caddieLoading}>
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={() => void fetchCaddieAdvice({ suggestTarget: false })}
+                      disabled={caddieLoading}
+                    >
                       Refresh advice
                     </button>
                   </div>

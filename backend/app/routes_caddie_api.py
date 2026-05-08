@@ -13,7 +13,13 @@ from pydantic import BaseModel, Field
 
 from .caddie_advice_context import build_caddie_advice_context
 from .caddie_lie_detect import classify_lie_from_blue_dot
-from .caddie_shot_intel import resolve_intended_landing
+from .caddie_shot_intel import gather_shot_intel, resolve_intended_landing
+from .caddie_target_agent import (
+    build_facts_payload,
+    compact_intel_slice,
+    finalize_target_coordinates,
+    run_white_target_agent,
+)
 from .elevenlabs_tts import synthesize_speech_mp3
 from .legacy import course_data as course_data_mod
 from .legacy import course_features
@@ -68,6 +74,20 @@ class CaddieAdviceOut(BaseModel):
 class CaddieTtsIn(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
     voice_id: str | None = Field(default=None, max_length=64)
+
+
+class SuggestTargetIn(BaseModel):
+    course_id: str = Field(min_length=1, max_length=128)
+    hole_number: int = Field(ge=1, le=18)
+    player_lat: float = Field(ge=-90, le=90)
+    player_lon: float = Field(ge=-180, le=180)
+
+
+class SuggestTargetOut(BaseModel):
+    target_lat: float
+    target_lon: float
+    rationale_short: str | None = None
+    used_agent: bool = True
 
 
 def _get_user_settings(conn: psycopg.Connection, user_id: int) -> dict[str, Any]:
@@ -140,6 +160,146 @@ def caddie_get_plays_like_path(
         bend_lat=bend_lat,
         bend_lon=bend_lon,
     )
+
+
+@router.post("/suggest-target", response_model=SuggestTargetOut)
+def caddie_suggest_target(
+    body: SuggestTargetIn,
+    user: Annotated[dict, Depends(get_current_user)],
+    conn: Annotated[psycopg.Connection, Depends(get_conn)],
+) -> SuggestTargetOut:
+    """Anthropic-powered placement of white map target before caddie advice runs."""
+    uid = int(user["id"])
+    s = _get_user_settings(conn, uid)
+    hcp = float(s["handicap_index"])
+    bag = dict(s["bag"] or {})
+    shot_shapes_store = s.get("shot_shapes") or {}
+    shot_shapes_norm = normalize_shot_shapes(shot_shapes_store if isinstance(shot_shapes_store, dict) else {})
+
+    course = course_data_mod.COURSES.get(body.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Unknown course_id")
+    holes = course.get("holes") or []
+    if body.hole_number < 1 or body.hole_number > len(holes):
+        raise HTTPException(status_code=404, detail="Invalid hole_number")
+    hole_dict = holes[body.hole_number - 1]
+    try:
+        features_for_lie = course_features.load_hole_feature_collection(body.course_id, body.hole_number)
+    except Exception:
+        features_for_lie = {"type": "FeatureCollection", "features": []}
+
+    lie_auto, lie_meta = classify_lie_from_blue_dot(
+        body.player_lat,
+        body.player_lon,
+        hole_dict,
+        features_for_lie,
+    )
+
+    payload = get_hole(
+        course_id=body.course_id,
+        hole_number=body.hole_number,
+        player_lat=body.player_lat,
+        player_lon=body.player_lon,
+        handicap=hcp,
+        lie=lie_auto,
+    )
+    hole = payload["hole"]
+    gc = hole["green_center"]
+    gclat, gclon = float(gc["lat"]), float(gc["lon"])
+    tee = hole["tee"]
+    tlat, tlon = float(tee["lat"]), float(tee["lon"])
+    metrics = payload["metrics"]
+    dist_pin = float(metrics.get("distance_yd") or 0.0)
+    plays_like = float(metrics.get("plays_like_yd") or dist_pin)
+
+    fb_lat, fb_lon, fb_meta = resolve_intended_landing(
+        body.player_lat,
+        body.player_lon,
+        gclat,
+        gclon,
+        None,
+        None,
+        bag,
+        hole,
+        lie_auto,
+        dist_pin,
+    )
+
+    features = payload["features"]
+    intel = gather_shot_intel(
+        hole=hole,
+        features=features,
+        player_lat=body.player_lat,
+        player_lon=body.player_lon,
+        landing_lat=fb_lat,
+        landing_lon=fb_lon,
+        landing_meta=dict(fb_meta),
+        bag=bag,
+        lie=lie_auto,
+        metrics=metrics,
+        shot_shapes=shot_shapes_norm,
+        lie_detect_detail=lie_meta,
+        handicap=hcp,
+    )
+
+    facts = build_facts_payload(
+        hole_par=int(hole.get("par") or 4),
+        card_yards=hole.get("yards"),
+        player_lat=body.player_lat,
+        player_lon=body.player_lon,
+        gc_lat=gclat,
+        gc_lon=gclon,
+        tee_lat=tlat,
+        tee_lon=tlon,
+        plays_like_yds=plays_like,
+        straight_pin_yds=dist_pin,
+        lie=str(lie_auto).lower(),
+        bag=bag,
+        handicap=hcp,
+        intel_compressed=compact_intel_slice(intel),
+    )
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        return SuggestTargetOut(
+            target_lat=fb_lat,
+            target_lon=fb_lon,
+            rationale_short=None,
+            used_agent=False,
+        )
+
+    model = os.environ.get("ANTHROPIC_CADDIE_TARGET_MODEL") or os.environ.get(
+        "ANTHROPIC_CADDIE_MODEL", "claude-haiku-4-5"
+    )
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+        parsed = run_white_target_agent(client=client, model=model, facts_json=facts)
+        tlat_out, tlon_out = finalize_target_coordinates(
+            parsed,
+            player_lat=body.player_lat,
+            player_lon=body.player_lon,
+            gc_lat=gclat,
+            gc_lon=gclon,
+            hole_features=features,
+            fallback_lat=fb_lat,
+            fallback_lon=fb_lon,
+        )
+        rationale = parsed.get("rationale_short")
+        rationale_s = str(rationale).strip()[:300] if rationale is not None else None
+        return SuggestTargetOut(
+            target_lat=tlat_out,
+            target_lon=tlon_out,
+            rationale_short=rationale_s or None,
+            used_agent=True,
+        )
+    except Exception:
+        return SuggestTargetOut(
+            target_lat=fb_lat,
+            target_lon=fb_lon,
+            rationale_short=None,
+            used_agent=False,
+        )
 
 
 @router.post("/advice", response_model=CaddieAdviceOut)
