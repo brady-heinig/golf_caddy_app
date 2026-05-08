@@ -404,7 +404,39 @@ def gather_shot_intel(
 
     rem_pin = haversine_yards(landing_lat, landing_lon, gclat, gclon)
     plays_like = float(metrics.get("plays_like_yd") or metrics.get("distance_yd") or 0.0)
-    current_club_pick = pick_club_for_plays_like_yards(bag, plays_like)
+
+    # Wind/elevation are folded into plays-like vs straight pin; apply same factor to carry-to-landing.
+    ratio_plays = 1.0
+    if dist_pin > 5.0:
+        ratio_plays = plays_like / dist_pin
+    ratio_plays = min(max(ratio_plays, 0.82), 1.22)
+
+    meaningfully_short_landing = (
+        carry_planned is not None
+        and plays_like > 55.0
+        and plays_like - float(carry_planned) >= 38.0
+    )
+    positional_play = meaningfully_short_landing
+
+    if positional_play:
+        club_distance_target = float(carry_planned) * ratio_plays
+        club_basis = "adjusted_carry_to_intended_landing"
+    else:
+        club_distance_target = plays_like
+        club_basis = "adjusted_plays_like_to_pin"
+
+    positional_note: str | None = None
+    if positional_play and carry_planned is not None:
+        pn_parts = [
+            f"Landing/target ~{int(round(float(carry_planned)))} yd carry vs ~{int(round(plays_like))} yd plays-like "
+            f"to pin — recommend clubs that fit the **fairway target**, not driver-at-green "
+            f"(often trees, routing, or doglegs block a straight long club)."
+        ]
+        if str(landing_meta.get("how") or "") == "map_bend":
+            pn_parts.append("White aim point on map confirms positional layup into fairway.")
+        positional_note = " ".join(pn_parts)
+
+    current_club_pick = pick_club_for_plays_like_yards(bag, club_distance_target)
     next_club_pick = pick_club_for_plays_like_yards(bag, float(rem_pin))
     next_seed = str(next_club_pick["club"])
     shapes_norm = normalize_shot_shapes(shot_shapes)
@@ -447,6 +479,7 @@ def gather_shot_intel(
     )
     go_for_it = bool(
         reachable_long
+        and not positional_play
         and not lie_blocks_long
         and par_int != 3
         and long_club_territory
@@ -470,6 +503,10 @@ def gather_shot_intel(
         cap = float(max_long or dist_pin * 0.58)
         suggested_layup_carry = suggested_layup_carry or round(max(140.0, min(dist_pin - ideal_remain, cap)), 1)
 
+    if positional_play and carry_planned is not None:
+        ideal_second = ideal_second or int(round(float(rem_pin)))
+        suggested_layup_carry = suggested_layup_carry or round(float(carry_planned), 1)
+
     if go_for_it:
         go_expl = (
             "Listed driver/wood carry can get you home or very close and the modeled line to the green "
@@ -477,6 +514,8 @@ def gather_shot_intel(
         )
     else:
         bits: list[str] = []
+        if positional_note:
+            bits.append(positional_note)
         if par_int == 3:
             bits.append("Par 3: treat this as a green attack with an appropriate scoring club, not a driver decision.")
         elif not reachable_long:
@@ -494,6 +533,10 @@ def gather_shot_intel(
     club_recommendation: dict[str, Any] = {
         "go_for_it": go_for_it,
         "go_for_it_explanation": go_expl,
+        "positional_play_to_landing": positional_play,
+        "positional_note": positional_note,
+        "club_distance_basis": club_basis,
+        "club_distance_basis_yds": round(float(club_distance_target), 1),
         "ideal_second_shot_distance_yds": ideal_second,
         "suggested_layup_carry_yds": suggested_layup_carry,
         "dogleg_turn_vs_tee_line_deg": round(dogleg_turn_deg, 1),
@@ -501,9 +544,11 @@ def gather_shot_intel(
         "severe_hazard_on_green_line": green_risk,
         "club_for_adjusted_plays_like": current_club_pick,
         "selection_notes": (
-            "After weighing go_for_it, dogleg / ideal layup numbers, corridor hazards, lie, and wind/elevation "
-            "(in narrative), set CLUB to match intent: pure bag-distance club for full shot to target, OR a shorter "
-            "club / knockdown / layup when ideal_second_shot_distance_yds or hazards argue against the long club."
+            "If positional_play_to_landing is true (or club_distance_basis is adjusted_carry_to_intended_landing), "
+            "the stroke is to the fairway / white target carry — typically irons or fairway metals, **not** driver at "
+            "the pin, even when plays-like yardage to the green would fit driver (trees, routing, etc.). "
+            "Otherwise weigh go_for_it, dogleg / ideal layup, hazards, lie, and wind/elevation; pick bag-distance club "
+            "for the chosen target or less club for safety."
         ),
     }
 

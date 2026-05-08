@@ -240,7 +240,8 @@ def build_caddie_advice_context(
         f"  Wind adjustment:      {wadj} yd ({metrics.get('wind_relation', '—')})",
         f"  Plays-like distance:  {plays} yd",
         f"  Lie (from blue dot on map): {lie}",
-        f"  Shot shape (Settings, {intel['shot_shape_from_settings']['club_category']} bucket): {shot_shape}",
+        f"  Shot shape (Settings, {intel['shot_shape_from_settings']['club_category']} bucket): "
+        f"{intel['shot_shape_from_settings']['shape']}",
         f"  Est. GIR (model):      {gir}% @ handicap {handicap:.1f}",
         "",
         "WEATHER:",
@@ -263,8 +264,9 @@ def build_caddie_advice_context(
         format_bag_lines(bag),
         "",
         "CLUB VS ADJUSTED DISTANCE + STRATEGY:",
-        f"  STRUCTURED_SHOT_INTEL.club_recommendation holds go_for_it, ideal_second_shot_distance_yds, "
-        f"suggested_layup_carry_yds, and club_for_adjusted_plays_like (bag rule: smallest listed carry ≥ plays-like). "
-        f"Resolve conflicts using hazards, dogleg note, and landing width before final CLUB.",
+        "  STRUCTURED_SHOT_INTEL.club_recommendation: go_for_it, positional_play_to_landing, positional_note, "
+        "club_distance_basis (+ club_distance_basis_yds), ideal_second_shot_distance_yds, suggested_layup_carry_yds, "
+        "club_for_adjusted_plays_like (bag rule vs club_distance_basis_yds when positional layup). "
+        "When positional_play_to_landing is true, target fairway/white-target carry — not driver-at-pin.",
     ]
     return "\n".join(parts)
