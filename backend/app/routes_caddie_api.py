@@ -13,11 +13,18 @@ from pydantic import BaseModel, Field
 
 from .caddie_advice_context import build_caddie_advice_context
 from .caddie_lie_detect import classify_lie_from_blue_dot
-from .caddie_shot_intel import gather_shot_intel, resolve_intended_landing
+from .caddie_shot_intel import (
+    _driver_or_longest_wood_yds,
+    fairway_width_at_landing_yds,
+    gather_shot_intel,
+    hazards_along_corridor,
+    resolve_intended_landing,
+)
 from .caddie_target_agent import (
     build_facts_payload,
     compact_intel_slice,
     finalize_target_coordinates,
+    point_ball_to_green_with_offset,
     run_white_target_agent,
 )
 from .elevenlabs_tts import synthesize_speech_mp3
@@ -241,6 +248,43 @@ def caddie_suggest_target(
         lie_detect_detail=lie_meta,
         handicap=hcp,
     )
+
+    # Deterministic shortcut for clearly-open tee shots: if driver landing appears wide/clear,
+    # set the marker there so the agent doesn't invent a conservative layup on open holes.
+    try:
+        pp = intel.get("player_position") or {}
+        near_tee_box = bool(pp.get("near_tee_box"))
+        par_int = int(hole.get("par") or 4)
+    except Exception:
+        near_tee_box = False
+        par_int = int(hole.get("par") or 4)
+
+    drv = _driver_or_longest_wood_yds(bag)
+    if near_tee_box and par_int >= 4 and drv and dist_pin > 120:
+        # Put target ~90% of driver carry up the hole.
+        t_drv = min(0.92, max(0.28, (float(drv) * 0.90) / max(float(dist_pin), 1.0)))
+        cand_lat, cand_lon = point_ball_to_green_with_offset(
+            body.player_lat, body.player_lon, gclat, gclon, t_drv, offset_right_m=0.0
+        )
+        fw_drv = fairway_width_at_landing_yds(features, body.player_lat, body.player_lon, cand_lat, cand_lon)
+        trouble_drv = hazards_along_corridor(
+            features,
+            body.player_lat,
+            body.player_lon,
+            cand_lat,
+            cand_lon,
+            ("water_hazard", "lateral_water_hazard", "out_of_bounds"),
+            cross_max_yds=70.0,
+        )
+        inside = bool((fw_drv or {}).get("landing_inside_fairway_polygon")) if fw_drv else False
+        width = (fw_drv or {}).get("width_yds") if fw_drv else None
+        if inside and (width is None or float(width) >= 24.0) and not trouble_drv:
+            return SuggestTargetOut(
+                target_lat=float(cand_lat),
+                target_lon=float(cand_lon),
+                rationale_short="Auto target: driver landing (open/wide corridor).",
+                used_agent=False,
+            )
 
     facts = build_facts_payload(
         hole_par=int(hole.get("par") or 4),

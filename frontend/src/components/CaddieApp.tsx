@@ -762,8 +762,7 @@ export function CaddieApp() {
           };
           const tlat = Number(sj.target_lat);
           const tlon = Number(sj.target_lon);
-          const usedAgent = sj.used_agent !== false;
-          if (sr.ok && usedAgent && Number.isFinite(tlat) && Number.isFinite(tlon)) {
+          if (sr.ok && Number.isFinite(tlat) && Number.isFinite(tlon)) {
             approachBendUserDraggedRef.current = true;
             mapInteractionRef.current?.updateDyn({ lat: tlat, lon: tlon });
           }
