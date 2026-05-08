@@ -917,8 +917,13 @@ export function CaddieApp() {
             ? (holeFeat.geometry.coordinates?.[0] ?? [])
             : [];
       const midIdx = coords.length >= 2 ? Math.floor(coords.length / 2) : 0;
-      const bendInit: LL =
+      const bendInitDefault: LL =
         coords.length >= 2 ? { lon: coords[midIdx][0], lat: coords[midIdx][1] } : { lon: tee.lon, lat: tee.lat };
+      // Preserve the agent/user-selected white target across hole-data refreshes.
+      const bendInit: LL =
+        approachBendUserDraggedRef.current && bendMapRef.current
+          ? bendMapRef.current
+          : bendInitDefault;
 
       const start: LL = playerLL;
       const end: LL = { lat: green.lat, lon: green.lon };

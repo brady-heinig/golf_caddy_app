@@ -262,24 +262,15 @@ def caddie_suggest_target(
 
     drv = _driver_or_longest_wood_yds(bag)
     if near_tee_box and par_int >= 4 and drv and dist_pin > 120:
-        # Put target ~90% of driver carry up the hole.
-        t_drv = min(0.92, max(0.28, (float(drv) * 0.90) / max(float(dist_pin), 1.0)))
-        cand_lat, cand_lon = point_ball_to_green_with_offset(
-            body.player_lat, body.player_lon, gclat, gclon, t_drv, offset_right_m=0.0
-        )
-        fw_drv = fairway_width_at_landing_yds(features, body.player_lat, body.player_lon, cand_lat, cand_lon)
-        trouble_drv = hazards_along_corridor(
-            features,
-            body.player_lat,
-            body.player_lon,
-            cand_lat,
-            cand_lon,
-            ("water_hazard", "lateral_water_hazard", "out_of_bounds"),
-            cross_max_yds=70.0,
-        )
-        inside = bool((fw_drv or {}).get("landing_inside_fairway_polygon")) if fw_drv else False
-        width = (fw_drv or {}).get("width_yds") if fw_drv else None
-        if inside and (width is None or float(width) >= 24.0) and not trouble_drv:
+        # Tee shots: choose the farthest *safe* landing, centered in fairway.
+        best: tuple[float, float] | None = None
+        best_dist = -1.0
+        # Try slightly more than 90% carry (still realistic), then work backwards.
+        for frac in (0.97, 0.94, 0.91, 0.88, 0.85, 0.82, 0.79, 0.76):
+            t_try = min(0.92, max(0.22, (float(drv) * float(frac)) / max(float(dist_pin), 1.0)))
+            cand_lat, cand_lon = point_ball_to_green_with_offset(
+                body.player_lat, body.player_lon, gclat, gclon, t_try, offset_right_m=0.0
+            )
             centered = center_target_in_fairway(
                 features=features,
                 player_lat=body.player_lat,
@@ -289,10 +280,37 @@ def caddie_suggest_target(
             )
             if centered:
                 cand_lat, cand_lon = centered
+
+            fw_drv = fairway_width_at_landing_yds(features, body.player_lat, body.player_lon, cand_lat, cand_lon)
+            inside = bool((fw_drv or {}).get("landing_inside_fairway_polygon")) if fw_drv else False
+            width = (fw_drv or {}).get("width_yds") if fw_drv else None
+            if not inside:
+                continue
+            if width is not None and float(width) < 22.0:
+                continue
+            trouble_drv = hazards_along_corridor(
+                features,
+                body.player_lat,
+                body.player_lon,
+                cand_lat,
+                cand_lon,
+                ("water_hazard", "lateral_water_hazard", "out_of_bounds"),
+                cross_max_yds=70.0,
+            )
+            if trouble_drv:
+                continue
+            d = float(haversine_yards(body.player_lat, body.player_lon, cand_lat, cand_lon))
+            if d > best_dist:
+                best_dist = d
+                best = (float(cand_lat), float(cand_lon))
+                # first match is already near-max, so stop early
+                break
+
+        if best is not None:
             return SuggestTargetOut(
-                target_lat=float(cand_lat),
-                target_lon=float(cand_lon),
-                rationale_short="Auto target: driver landing (open/wide corridor).",
+                target_lat=best[0],
+                target_lon=best[1],
+                rationale_short="Auto target: farthest safe tee shot (fairway-centered).",
                 used_agent=False,
             )
 
