@@ -1497,11 +1497,6 @@ export function CaddieApp() {
               </button>
             </div>
             <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
-              <div style={{ fontSize: 13, color: "rgba(11,18,32,0.7)" }}>
-                Lie is read from where your blue dot sits (tee, fairway, rough, bunker, or fringe). Shot shape uses
-                your driver / woods-hybrid / irons preferences from Settings. Adjust the white target on the map to
-                change the planned landing.
-              </div>
               {caddieLoading ? (
                 <div style={{ fontSize: 14, padding: "12px 0" }}>Getting advice…</div>
               ) : null}
@@ -1569,9 +1564,6 @@ export function CaddieApp() {
                     <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()} disabled={caddieLoading}>
                       Refresh advice
                     </button>
-                  </div>
-                  <div style={{ fontSize: 12, color: "rgba(11,18,32,0.55)" }}>
-                    If ElevenLabs shows a VPN or free-tier block, try Device voice or upgrade your ElevenLabs plan.
                   </div>
                   {ttsErr ? <div style={{ fontSize: 13, color: "#b91c1c" }}>{ttsErr}</div> : null}
                 </div>

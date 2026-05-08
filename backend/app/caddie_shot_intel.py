@@ -331,6 +331,79 @@ def hazards_along_corridor(
     return out[:14]
 
 
+def _build_next_shot_if_plan_works(
+    *,
+    shot_type: str,
+    carry_planned: float | None,
+    rem_pin: float,
+    plays_like: float,
+    positional_play: bool,
+    next_seed: str,
+) -> tuple[str, dict[str, Any]]:
+    """Summary copy + optional flags when this stroke can hold the green vs layup."""
+    extras: dict[str, Any] = {}
+
+    if shot_type == "tee_par3":
+        txt = (
+            "Par 3: this stroke is your green attack — hit the green and next is a putt. "
+            "A slight miss short or long into fringe or fairway usually still sets up an easy up-and-down."
+        )
+        extras["if_on_green_next"] = "putt"
+        extras["if_miss_ok_area_next"] = "easy_up_and_down_typical"
+        extras["can_hold_green_this_shot"] = True
+        return txt, extras
+
+    layup_style = positional_play or (shot_type == "tee_par4_or_5" and plays_like > 285)
+    if layup_style:
+        if shot_type == "tee_par4_or_5" and carry_planned:
+            txt = (
+                f"If this tee ball covers ~{int(carry_planned)} yd into the intended zone, you’d have about "
+                f"{int(rem_pin)} yd left — expect a {next_seed} approach next, not a putt off this tee."
+            )
+        else:
+            txt = (
+                f"If you find the intended zone, you’d have about {int(rem_pin)} yd left; bag heuristic suggests "
+                f"{next_seed} as a starting point."
+            )
+        return txt, extras
+
+    can_attack_green = not positional_play and (
+        (shot_type == "tee_par4_or_5" and plays_like <= 285)
+        or (shot_type not in ("tee_par4_or_5",) and plays_like <= 205)
+    )
+
+    if can_attack_green:
+        extras["if_on_green_next"] = "putt"
+        extras["if_miss_ok_area_next"] = "easy_up_and_down_typical"
+        extras["can_hold_green_this_shot"] = True
+        tight = rem_pin <= 22
+        if tight:
+            txt = (
+                "Hit this shot on plan and you should be on or tight — next is a putt. "
+                "If you miss a little but catch fringe, collar, or short fairway, it’s usually a straightforward "
+                "up-and-down."
+            )
+        else:
+            txt = (
+                "If the plan works and you hold the green, next is a putt. "
+                "If you miss thin into a playable area (fringe, light rough, safe short or long), "
+                "expect an easy up-and-down rather than a full approach back from trouble."
+            )
+        return txt, extras
+
+    if shot_type == "tee_par4_or_5" and carry_planned:
+        txt = (
+            f"If this tee ball covers ~{int(carry_planned)} yd as intended, next is roughly "
+            f"{int(rem_pin)} yd in — often a {next_seed} from a fairway lie."
+        )
+    else:
+        txt = (
+            f"If you find the intended zone, you’d have about {int(rem_pin)} yd left; bag heuristic suggests "
+            f"{next_seed} as a starting point."
+        )
+    return txt, extras
+
+
 def gather_shot_intel(
     *,
     hole: dict[str, Any],
@@ -552,18 +625,14 @@ def gather_shot_intel(
         ),
     }
 
-    if shot_type == "tee_par4_or_5" and carry_planned:
-        next_lbl = (
-            f"If this tee ball covers ~{int(carry_planned)} yd as intended, next shot is roughly "
-            f"{int(rem_pin)} yd to the pin — often a {next_seed} from a fairway lie."
-        )
-    elif shot_type == "tee_par3":
-        next_lbl = "Par 3: this stroke is your green attack; there is no separate ‘next tee shot’."
-    else:
-        next_lbl = (
-            f"If you find the intended zone, you’d have about {int(rem_pin)} yd left; bag heuristic suggests "
-            f"{next_seed} as a starting point."
-        )
+    next_lbl, next_extras = _build_next_shot_if_plan_works(
+        shot_type=shot_type,
+        carry_planned=carry_planned,
+        rem_pin=float(rem_pin),
+        plays_like=plays_like,
+        positional_play=positional_play,
+        next_seed=next_seed,
+    )
 
     return {
         "shot_shape_from_settings": {
@@ -602,5 +671,6 @@ def gather_shot_intel(
             "remaining_distance_to_pin_yds": round(rem_pin),
             "club_pick_same_rule": next_club_pick,
             "summary": next_lbl,
+            **next_extras,
         },
     }

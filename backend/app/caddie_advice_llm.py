@@ -49,7 +49,10 @@ _LINE_HINTS: dict[str, str] = {
         "when club_distance_basis is adjusted_carry_to_intended_landing, fit carry to white/fairway target — "
         "never driver-at-pin based only on plays-like to pin."
     ),
-    "NEXT_SHOT": "One short clause condensed from next_shot_if_plan_works.summary.",
+    "NEXT_SHOT": (
+        "One or two sentences from next_shot_if_plan_works.summary; if can_hold_green_this_shot is true, "
+        "state that next is a putt on plan and an easy up-and-down on a favorable miss."
+    ),
 }
 
 CADDIE_BRIEFING_SYSTEM = (
@@ -74,7 +77,8 @@ CADDIE_SUMMARY_SYSTEM = (
     "- How hard to swing the club, if the distance is between clubs, I should just take a little bit off the longer club.\n"
     "- What to look to avoid (hazards, trouble, etc.).\n"
     "- Where to aim and the shot shape (club_recommendation.shot_shape_from_settings.shape).\n"
-    "- What an ideal outcome leaves for the next shot.\n"
+    "- What an ideal outcome leaves for the next shot (putt if you hold the green on an attacking swing; "
+    "easy up-and-down if you miss slightly to a safe spot — when STRUCTURED_SHOT_INTEL says so).\n"
     "- A brief word of encouragement.\n"
     "If space is tight, prioritize: yardage, club/carry intent, aim, next-shot leave, then hazards and encouragement.\n"
     "If STRUCTURED_SHOT_INTEL.club_recommendation.positional_play_to_landing is true, say clearly this stroke is a "

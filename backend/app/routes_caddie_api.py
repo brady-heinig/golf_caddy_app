@@ -297,9 +297,8 @@ def _friendly_tts_error(message: str) -> str:
     m = (message or "").lower()
     if "unusual activity" in m or ("free tier" in m and "disabled" in m):
         return (
-            "ElevenLabs refused this request (their anti-abuse checks often flag VPNs, datacenter IPs, or free-tier limits). "
-            "Try: turn off VPN, use home/mobile data, upgrade to a paid ElevenLabs plan, or contact their support. "
-            "In the app you can use ‘Device voice’ for free browser speech without ElevenLabs."
+            "ElevenLabs could not complete this request. Try Device voice or check your account and billing on "
+            "elevenlabs.io."
         )
     if "401" in message or "unauthorized" in m:
         return "ElevenLabs API key rejected. Check ELEVENLABS_API_KEY on the server."
