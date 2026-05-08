@@ -7,7 +7,7 @@ from typing import Any
 
 import anthropic
 from shapely.geometry import LineString, Point, shape
-from shapely.ops import nearest_points, unary_union
+from shapely.ops import nearest_points, transform, unary_union
 
 from .routes_caddie_compat import haversine_yards
 
@@ -25,6 +25,13 @@ def _xy_m_to_latlon(ref_lat: float, ref_lon: float, x: float, y: float) -> tuple
     lat = ref_lat + y / 111_320.0
     lon = ref_lon + x / (111_320.0 * math.cos(mid))
     return (lat, lon)
+
+
+def _geom_to_xy(geom: Any, ref_lat: float, ref_lon: float) -> Any:
+    def _tr(x: float, y: float, _z: float | None = None) -> tuple[float, float]:
+        return _latlon_to_xy_m(ref_lat, ref_lon, y, x)
+
+    return transform(_tr, geom)
 
 
 def point_ball_to_green_with_offset(
@@ -144,6 +151,61 @@ def _line_respects_fairway_corridor(
         if d > float(max_off_fairway_yd):
             return False
     return True
+
+
+def center_target_in_fairway(
+    *,
+    features: dict[str, Any],
+    player_lat: float,
+    player_lon: float,
+    target_lat: float,
+    target_lon: float,
+    half_width_m: float = 240.0,
+) -> tuple[float, float] | None:
+    """Shift a target to the fairway midpoint across its width at that station.
+
+    This approximates "aim middle of fairway, equal distance from each side" for tee shots.
+    """
+    fw = _features_union(features, "fairway")
+    if fw is None or fw.is_empty:
+        return None
+    try:
+        fw_xy = _geom_to_xy(fw, player_lat, player_lon)
+    except Exception:
+        return None
+
+    tx, ty = _latlon_to_xy_m(player_lat, player_lon, target_lat, target_lon)
+    px, py = _latlon_to_xy_m(player_lat, player_lon, player_lat, player_lon)
+    dx, dy = tx - px, ty - py
+    seg = math.hypot(dx, dy)
+    if seg < 1.0:
+        return None
+    ux, uy = dx / seg, dy / seg
+    # Perpendicular to shot direction.
+    vx, vy = -uy, ux
+
+    cut = LineString([(tx - vx * half_width_m, ty - vy * half_width_m), (tx + vx * half_width_m, ty + vy * half_width_m)])
+    try:
+        inter = cut.intersection(fw_xy)
+    except Exception:
+        return None
+    if inter.is_empty:
+        return None
+
+    # Reduce to a single longest segment and take its midpoint.
+    segs: list[LineString] = []
+    if inter.geom_type == "LineString":
+        segs = [inter]
+    elif inter.geom_type == "MultiLineString":
+        segs = [g for g in inter.geoms if g.geom_type == "LineString"]
+    elif inter.geom_type == "GeometryCollection":
+        segs = [g for g in inter.geoms if g.geom_type == "LineString"]
+    if not segs:
+        return None
+    segs.sort(key=lambda g: float(g.length), reverse=True)
+    best = segs[0]
+    mid = best.interpolate(0.5, normalized=True)
+    return _xy_m_to_latlon(player_lat, player_lon, float(mid.x), float(mid.y))
 
 
 def _two_leg_respects_corridor(
@@ -356,7 +418,6 @@ def finalize_target_coordinates(
     fallback_lat: float,
     fallback_lon: float,
     max_off_fairway_yd: float = 18.0,
-    force_centerline: bool = False,
 ) -> tuple[float, float]:
     gm = parsed.get("green_aim_mode")
     green_mode = gm is True or (isinstance(gm, str) and gm.strip().lower() in ("true", "yes"))
@@ -371,8 +432,6 @@ def finalize_target_coordinates(
         off_y = 0.0
 
     off_m = max(-49.0, min(49.0, off_y * 0.9144))
-    if force_centerline:
-        off_m = 0.0
 
     fairway_union = _features_union(hole_features, "fairway")
     green_union = _features_union(hole_features, "green")
@@ -465,33 +524,18 @@ def finalize_target_coordinates(
     use_lat, use_lon = (cand_lat, cand_lon)
     if snapped and fairway_union is not None and not fairway_union.is_empty:
         # Only snap to centerline if it doesn't reintroduce a corner-cut.
-        if force_centerline:
-            # Tee-shot: aim middle of fairway (centerline) when feasible.
-            if _two_leg_respects_corridor(
-                player_lat,
-                player_lon,
-                float(snapped[0]),
-                float(snapped[1]),
-                gc_lat,
-                gc_lon,
-                fairway_union,
-                max_off_fairway_yd=max_off_fairway_yd,
-                samples=9,
-            ):
-                use_lat, use_lon = float(snapped[0]), float(snapped[1])
-        else:
-            if _two_leg_respects_corridor(
-                player_lat,
-                player_lon,
-                float(snapped[0]),
-                float(snapped[1]),
-                gc_lat,
-                gc_lon,
-                fairway_union,
-                max_off_fairway_yd=max_off_fairway_yd,
-                samples=9,
-            ):
-                use_lat, use_lon = float(snapped[0]), float(snapped[1])
+        if _two_leg_respects_corridor(
+            player_lat,
+            player_lon,
+            float(snapped[0]),
+            float(snapped[1]),
+            gc_lat,
+            gc_lon,
+            fairway_union,
+            max_off_fairway_yd=max_off_fairway_yd,
+            samples=9,
+        ):
+            use_lat, use_lon = float(snapped[0]), float(snapped[1])
     if not _ok(use_lat, use_lon):
         return (fallback_lat, fallback_lon)
     if not (-90 <= use_lat <= 90 and -180 <= use_lon <= 180):

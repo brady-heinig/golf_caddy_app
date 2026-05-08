@@ -22,6 +22,7 @@ from .caddie_shot_intel import (
 )
 from .caddie_target_agent import (
     build_facts_payload,
+    center_target_in_fairway,
     compact_intel_slice,
     finalize_target_coordinates,
     point_ball_to_green_with_offset,
@@ -279,6 +280,15 @@ def caddie_suggest_target(
         inside = bool((fw_drv or {}).get("landing_inside_fairway_polygon")) if fw_drv else False
         width = (fw_drv or {}).get("width_yds") if fw_drv else None
         if inside and (width is None or float(width) >= 24.0) and not trouble_drv:
+            centered = center_target_in_fairway(
+                features=features,
+                player_lat=body.player_lat,
+                player_lon=body.player_lon,
+                target_lat=float(cand_lat),
+                target_lon=float(cand_lon),
+            )
+            if centered:
+                cand_lat, cand_lon = centered
             return SuggestTargetOut(
                 target_lat=float(cand_lat),
                 target_lon=float(cand_lon),
@@ -340,10 +350,19 @@ def caddie_suggest_target(
             fallback_lat=fb_lat,
             fallback_lon=fb_lon,
             max_off_fairway_yd=max_off_fw,
-            force_centerline=bool(near_tee_box and int(hole.get("par") or 4) >= 4),
         )
         rationale = parsed.get("rationale_short")
         rationale_s = str(rationale).strip()[:300] if rationale is not None else None
+        if aggressive or (near_tee_box and par_int >= 4):
+            centered = center_target_in_fairway(
+                features=features,
+                player_lat=body.player_lat,
+                player_lon=body.player_lon,
+                target_lat=float(tlat_out),
+                target_lon=float(tlon_out),
+            )
+            if centered:
+                tlat_out, tlon_out = centered
         return SuggestTargetOut(
             target_lat=tlat_out,
             target_lon=tlon_out,
