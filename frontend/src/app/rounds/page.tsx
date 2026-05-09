@@ -74,7 +74,7 @@ export default function RoundsPage() {
   }
 
   return (
-    <main className="pageScroll" style={{ padding: 20, maxWidth: 860, margin: "0 auto" }}>
+    <main className="pageScrollLight" style={{ padding: 20, maxWidth: 860, margin: "0 auto" }}>
       <h1 style={{ marginTop: 0 }}>Rounds</h1>
       <p style={{ opacity: 0.8 }}>
         Start a round, exit anytime, and resume later. (Progress is stored server-side.)

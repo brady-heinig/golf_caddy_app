@@ -56,6 +56,46 @@ body {
   -webkit-overflow-scrolling: touch;
 }
 
+/* Settings + Rounds: full white viewport (phone frame still clips; content area reads as white). */
+.pageScrollLight {
+  height: min(100dvh, var(--phoneH));
+  overflow: auto;
+  -webkit-overflow-scrolling: touch;
+  background: #ffffff;
+  color: #0b1220;
+}
+
+.pageScrollLight a {
+  color: #0d6b55;
+  font-weight: 700;
+}
+
+.pageScrollLight a:hover {
+  text-decoration: underline;
+}
+
+.pageScrollLight hr {
+  border: none;
+  border-top: 1px solid rgba(11, 18, 32, 0.12);
+}
+
+.pageScrollLight input,
+.pageScrollLight textarea,
+.pageScrollLight select {
+  border: 1px solid rgba(11, 18, 32, 0.22);
+  border-radius: 8px;
+  background: #fff;
+  color: #0b1220;
+}
+
+.pageScrollLight button {
+  border: 1px solid rgba(11, 18, 32, 0.2);
+  border-radius: 10px;
+  background: #f4f6f8;
+  color: #0b1220;
+  cursor: pointer;
+}
+
 .landingPhone {
   height: min(100dvh, var(--phoneH));
   background: #ffffff;

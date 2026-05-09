@@ -90,10 +90,10 @@ export default function SettingsPage() {
     }
   }
 
-  if (loading) return <main className="pageScroll" style={{ padding: 20 }}>Loading…</main>;
+  if (loading) return <main className="pageScrollLight" style={{ padding: 20 }}>Loading…</main>;
 
   return (
-    <main className="pageScroll" style={{ padding: 20, maxWidth: 760, margin: "0 auto" }}>
+    <main className="pageScrollLight" style={{ padding: 20, maxWidth: 760, margin: "0 auto" }}>
       <h1 style={{ marginTop: 0 }}>Settings</h1>
       <section style={{ display: "grid", gap: 10, marginBottom: 18 }}>
         <label>

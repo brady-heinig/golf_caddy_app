@@ -660,9 +660,30 @@ export function CaddieApp() {
     }
   }, [showCaddieAdvice]);
 
-  const playCaddieTts = useCallback(async () => {
-    const text = (caddieSummary ?? "").trim();
+  function deviceSpeakAdvice(raw: string) {
+    if (!raw.trim() || typeof window === "undefined" || !window.speechSynthesis) return;
+    window.speechSynthesis.cancel();
+    const text = raw
+      .replace(/\r/g, "")
+      .replace(/\n-{3,}\n/g, ". ")
+      .replace(/\n+/g, ". ")
+      .replace(/\s+/g, " ")
+      .trim();
     if (!text) return;
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "en-US";
+    u.rate = 1;
+    window.speechSynthesis.speak(u);
+  }
+
+  /** After advice returns: ElevenLabs when configured; browser speech synthesis on failure (or autoplay quirks). */
+  const speakAdviceAutomatically = useCallback(async (spokenFromApi: string) => {
+    let text = (spokenFromApi ?? "").trim();
+    if (/^(?:\*{0,2}\s*)?SUMMARY\s*:\s*\*{0,2}\s*/i.test(text)) {
+      text = text.replace(/^(?:\*{0,2}\s*)?SUMMARY\s*:\s*\*{0,2}\s*/i, "").trim();
+    }
+    if (!text) return;
+
     setTtsErr(null);
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
@@ -672,6 +693,10 @@ export function CaddieApp() {
       URL.revokeObjectURL(ttsObjectUrlRef.current);
       ttsObjectUrlRef.current = null;
     }
+    if (typeof window !== "undefined" && window.speechSynthesis) {
+      window.speechSynthesis.cancel();
+    }
+
     setTtsLoading(true);
     try {
       const res = await fetch("/api/caddie/tts", {
@@ -702,30 +727,16 @@ export function CaddieApp() {
         if (ttsAudioRef.current === audio) ttsAudioRef.current = null;
       };
       await audio.play();
-    } catch (e) {
-      setTtsErr(e instanceof Error ? e.message : String(e));
+    } catch {
+      try {
+        deviceSpeakAdvice(text);
+      } catch {
+        setTtsErr("Voice unavailable (ElevenLabs and device speech failed).");
+      }
     } finally {
       setTtsLoading(false);
     }
-  }, [caddieSummary]);
-
-  /** Free fallback: browser speech synthesis (quality varies by OS). */
-  const playDeviceVoice = useCallback(() => {
-    const raw = (caddieSummary ?? "").trim();
-    if (!raw || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const text = raw
-      .replace(/\r/g, "")
-      .replace(/\n-{3,}\n/g, ". ")
-      .replace(/\n+/g, ". ")
-      .replace(/\s+/g, " ")
-      .trim();
-    if (!text) return;
-    const u = new SpeechSynthesisUtterance(text);
-    u.lang = "en-US";
-    u.rate = 1;
-    window.speechSynthesis.speak(u);
-  }, [caddieSummary]);
+  }, []);
 
   const fetchCaddieAdvice = useCallback(async (opts?: { suggestTarget?: boolean }) => {
     const pos = effectivePos;
@@ -801,6 +812,8 @@ export function CaddieApp() {
       const parsed = parseCaddieAdvicePayload(data as Record<string, unknown>);
       setCaddieBriefing(parsed.briefing);
       setCaddieSummary(parsed.summary);
+      const summarySpeak = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+      if (summarySpeak) void speakAdviceAutomatically(summarySpeak);
     } catch (e) {
       setCaddieErr(e instanceof Error ? e.message : String(e));
       setCaddieBriefing(null);
@@ -808,7 +821,7 @@ export function CaddieApp() {
     } finally {
       setCaddieLoading(false);
     }
-  }, [courseId, holeNum, effectivePos, roundMode, liveGps]);
+  }, [courseId, holeNum, effectivePos, roundMode, liveGps, speakAdviceAutomatically]);
 
   useEffect(() => {
     if (!showCaddieAdvice) return;
@@ -1574,38 +1587,11 @@ export function CaddieApp() {
                       </div>
                     </details>
                   ) : null}
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
-                    <button
-                      type="button"
-                      className="btn btnPrimary"
-                      onClick={() => void playCaddieTts()}
-                      disabled={ttsLoading || !(caddieSummary ?? "").trim()}
-                      title={!(caddieSummary ?? "").trim() ? "Need a summary to play voice" : undefined}
-                    >
-                      {ttsLoading ? "Loading voice…" : "Listen (ElevenLabs)"}
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => playDeviceVoice()}
-                      disabled={!(caddieSummary ?? "").trim()}
-                      title={
-                        !(caddieSummary ?? "").trim()
-                          ? "Need a summary for device voice"
-                          : "Uses your browser; no ElevenLabs"
-                      }
-                    >
-                      Device voice
-                    </button>
-                    <button
-                      type="button"
-                      className="btn"
-                      onClick={() => void fetchCaddieAdvice({ suggestTarget: false })}
-                      disabled={caddieLoading}
-                    >
-                      Refresh advice
-                    </button>
-                  </div>
+                  {ttsLoading && (caddieSummary ?? "").trim() ? (
+                    <div className="metricSub" style={{ paddingTop: 2 }} aria-live="polite">
+                      Playing caddie voice…
+                    </div>
+                  ) : null}
                   {ttsErr ? <div style={{ fontSize: 13, color: "#b91c1c" }}>{ttsErr}</div> : null}
                 </div>
               ) : null}
