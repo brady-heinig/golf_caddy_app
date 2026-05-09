@@ -153,6 +153,64 @@ def voice_followup_answer(
     return _one_spoken_sentence(raw)
 
 
+def format_voice_hole_situation(
+    *,
+    course_name: str | None,
+    hole_number: int,
+    par: int | None,
+    plays_like_yds: float | None,
+    lie_label: str,
+    landing_hint: str,
+) -> str:
+    """Single block of on-course facts for voice Q&A models."""
+    crs = course_name.strip() if course_name else ""
+    head = f"Course: {crs}. " if crs else ""
+    segs = [f"Hole {hole_number}"]
+    if par is not None:
+        segs.append(f"par {par}")
+    if plays_like_yds is not None:
+        segs.append(f"~{round(plays_like_yds)} yd plays-like to pin")
+    hole_line = ", ".join(segs) + "."
+    return (
+        head
+        + hole_line
+        + f"\nLie: {lie_label}.\nAim / target: {landing_hint}.\n"
+    )
+
+
+def voice_thread_reply(
+    *,
+    situation: str,
+    transcript: list[tuple[str, str]],
+) -> str:
+    """Next caddie reply in a multi-turn voice conversation; uses full transcript as memory."""
+    lines: list[str] = []
+    for role, content in transcript:
+        r = "Player" if role == "user" else "Caddie"
+        lines.append(f"{r}: {content.strip()}")
+    convo = "\n".join(lines)
+    sys = (
+        "You are the player's on-course golf caddie in a **continuing voice conversation**.\n"
+        "You receive the current hole situation (facts) and the full dialogue so far.\n"
+        "Rules:\n"
+        "- Respond with **exactly one sentence** unless the player explicitly asked for two distinct things; "
+        "if two, use at most two short clauses in one breath (still one sentence).\n"
+        "- Your reply must **directly address their last message** and stay consistent with **everything the player "
+        "said earlier** in the thread (clubs, choices, worries, numbers they gave).\n"
+        "- Do not reset the topic unless they changed it; use prior user lines as binding context.\n"
+        "- No bullets, no recap of the whole thread, no 'as we discussed' padding.\n"
+        "- Stay within on-course advice; if unclear, ask one clarifying thing in that single sentence.\n"
+        f"\nSITUATION (grounding — use if relevant):\n{situation.strip()}\n"
+    )
+    usr = (
+        "CONVERSATION (chronological, oldest first):\n"
+        f"{convo}\n\n"
+        "Write the Caddie's **next** spoken reply only (plain text, no label)."
+    )
+    raw = _call_text(sys, usr, max_tokens=200)
+    return _one_spoken_sentence(raw, max_chars=300)
+
+
 _slug_key_re = re.compile(r"[^a-z0-9]")
 
 

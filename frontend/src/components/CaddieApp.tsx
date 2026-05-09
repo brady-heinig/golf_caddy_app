@@ -37,6 +37,13 @@ function genPlayerId(): string {
   return `p-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
 }
 
+function voiceLineId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
+  return `v-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+}
+
+type VoiceThreadLine = { id: string; role: "user" | "assistant"; content: string };
+
 function emptyScores18(): (number | null)[] {
   return Array.from({ length: 18 }, () => null);
 }
@@ -351,8 +358,13 @@ export function CaddieApp() {
   const [lastShotFeedbackPrompt, setLastShotFeedbackPrompt] = useState<string | null>(null);
   const [lastShotAwaitingSpeakOrMic, setLastShotAwaitingSpeakOrMic] = useState(false);
   const [listeningLastShot, setListeningLastShot] = useState(false);
-  const [voiceFollowupBusy, setVoiceFollowupBusy] = useState(false);
-  const [voiceFollowupAnswer, setVoiceFollowupAnswer] = useState<string | null>(null);
+  const [showVoiceAsk, setShowVoiceAsk] = useState(false);
+  const [voiceThread, setVoiceThread] = useState<VoiceThreadLine[]>([]);
+  const voiceThreadRef = useRef<VoiceThreadLine[]>([]);
+  voiceThreadRef.current = voiceThread;
+  const [voiceAskBusy, setVoiceAskBusy] = useState(false);
+  const [voiceAskErr, setVoiceAskErr] = useState<string | null>(null);
+  const voiceScrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsErr, setTtsErr] = useState<string | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -674,7 +686,7 @@ export function CaddieApp() {
   }, [showScore]);
 
   useEffect(() => {
-    if (showCaddieAdvice) return;
+    if (showCaddieAdvice || showVoiceAsk) return;
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
       ttsAudioRef.current = null;
@@ -687,7 +699,12 @@ export function CaddieApp() {
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
-  }, [showCaddieAdvice]);
+  }, [showCaddieAdvice, showVoiceAsk]);
+
+  useLayoutEffect(() => {
+    if (!showVoiceAsk) return;
+    voiceScrollAnchorRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
+  }, [showVoiceAsk, voiceThread]);
 
   function deviceSpeakAdvice(raw: string) {
     if (!raw.trim() || typeof window === "undefined" || !window.speechSynthesis) return;
@@ -901,29 +918,47 @@ export function CaddieApp() {
     }
   }, [courseId, fetchCaddieAdviceInternal, lastShotFeedbackPrompt]);
 
-  const askCaddieVoiceFollowup = useCallback(async () => {
+  const openVoiceAskModal = useCallback(() => {
+    setVoiceAskErr(null);
+    setVoiceThread([]);
+    setShowVoiceAsk(true);
+  }, []);
+
+  const runVoiceConversationTurn = useCallback(async () => {
     const pos = effectivePos;
-    if (!pos) return;
-    setVoiceFollowupBusy(true);
-    setVoiceFollowupAnswer(null);
-    setCaddieErr(null);
+    if (!pos) {
+      setVoiceAskErr(
+        roundMode === "live" && liveGps == null
+          ? "Still acquiring GPS."
+          : roundMode === "sim"
+            ? "Sim position not ready."
+            : "Position unavailable.",
+      );
+      return;
+    }
+    setVoiceAskBusy(true);
+    setVoiceAskErr(null);
     try {
+      const transcript = await listenOnce({});
+      const t = transcript.trim();
+      if (!t) throw new Error("No speech detected.");
+      const userLine: VoiceThreadLine = { id: voiceLineId(), role: "user", content: t };
+      const withUser = [...voiceThreadRef.current, userLine];
+      setVoiceThread(withUser);
+
       const bend = bendMapRef.current;
-      const q = await listenOnce({});
-      if (!q.trim()) throw new Error("No question heard.");
       const body: Record<string, unknown> = {
         course_id: courseId,
         hole_number: holeNum,
         player_lat: pos.lat,
         player_lon: pos.lon,
-        question: q,
-        advice_summary_recent: (caddieSummary ?? "").trim().slice(0, 900) || null,
+        messages: withUser.map(({ role, content }) => ({ role, content })),
       };
       if (bend != null && Number.isFinite(bend.lat) && Number.isFinite(bend.lon)) {
         body.bend_lat = bend.lat;
         body.bend_lon = bend.lon;
       }
-      const res = await fetch("/api/caddie/voice-followup", {
+      const res = await fetch("/api/caddie/voice-conversation-turn", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -937,18 +972,23 @@ export function CaddieApp() {
             : Array.isArray(detail)
               ? (detail as { msg?: string }[]).map((d) => d?.msg ?? JSON.stringify(d)).join("; ")
               : res.statusText;
-        throw new Error(msg || "Follow-up failed");
+        throw new Error(msg || "Request failed");
       }
-      const ans = typeof (data as { answer_summary?: unknown }).answer_summary === "string" ? (data as { answer_summary: string }).answer_summary.trim() : "";
-      if (!ans) throw new Error("Empty response.");
-      setVoiceFollowupAnswer(ans);
+      const ans =
+        typeof (data as { answer_summary?: unknown }).answer_summary === "string"
+          ? (data as { answer_summary: string }).answer_summary.trim()
+          : "";
+      if (!ans) throw new Error("Empty reply.");
+      const botLine: VoiceThreadLine = { id: voiceLineId(), role: "assistant", content: ans };
+      const full = [...withUser, botLine];
+      setVoiceThread(full);
       await speakAdviceAutomatically(ans);
     } catch (e) {
-      setCaddieErr(e instanceof Error ? e.message : String(e));
+      setVoiceAskErr(e instanceof Error ? e.message : String(e));
     } finally {
-      setVoiceFollowupBusy(false);
+      setVoiceAskBusy(false);
     }
-  }, [caddieSummary, courseId, effectivePos, holeNum, speakAdviceAutomatically]);
+  }, [courseId, effectivePos, holeNum, liveGps, roundMode, speakAdviceAutomatically]);
 
   useEffect(() => {
     if (!showCaddieAdvice) return;
@@ -1074,7 +1114,6 @@ export function CaddieApp() {
     setCaddieErr(null);
     setCaddieBriefing(null);
     setCaddieSummary(null);
-    setVoiceFollowupAnswer(null);
     setLastShotFeedbackPrompt(null);
     setLastShotAwaitingSpeakOrMic(false);
     setListeningLastShot(false);
@@ -1700,9 +1739,14 @@ export function CaddieApp() {
         <button className="btn" onClick={() => setHoleNum((h) => Math.min(18, h + 1))} aria-label="Next hole">
           ▶
         </button>
-        <button className="btn btnPrimary" onClick={talkWithCaddie} aria-label="Talk with caddie">
-          Talk with caddie
-        </button>
+        <div style={{ display: "flex", gap: 8, alignItems: "stretch", minWidth: 0 }}>
+          <button type="button" className="btn btnPrimary" style={{ flex: 1, padding: "8px 6px", fontSize: 12, whiteSpace: "normal", lineHeight: 1.25 }} onClick={talkWithCaddie} aria-label="Talk with caddie">
+            Talk with caddie
+          </button>
+          <button type="button" className="btn" style={{ flex: 1, padding: "8px 6px", fontSize: 12, whiteSpace: "normal", lineHeight: 1.25 }} onClick={openVoiceAskModal} aria-label="Ask question with voice">
+            Ask question
+          </button>
+        </div>
       </div>
 
       {showHolePicker ? (
@@ -1906,24 +1950,6 @@ export function CaddieApp() {
                       </div>
                     </details>
                   ) : null}
-                  {voiceFollowupAnswer ? (
-                    <div
-                      style={{
-                        marginTop: 4,
-                        padding: "10px 12px",
-                        borderRadius: 8,
-                        background: "rgba(11,18,32,0.05)",
-                        fontSize: 14,
-                        lineHeight: 1.45,
-                        whiteSpace: "pre-wrap",
-                      }}
-                    >
-                      <div style={{ fontWeight: 800, fontSize: 11, letterSpacing: "0.08em", marginBottom: 6 }}>
-                        YOUR QUESTION (VOICE)
-                      </div>
-                      {voiceFollowupAnswer}
-                    </div>
-                  ) : null}
                   {ttsLoading && (caddieSummary ?? "").trim() ? (
                     <div className="metricSub" style={{ paddingTop: 2 }} aria-live="polite">
                       Playing caddie voice…
@@ -1933,30 +1959,100 @@ export function CaddieApp() {
                 </div>
               ) : null}
             </div>
-            {caddieSummary && !lastShotFeedbackPrompt && !lastShotAwaitingSpeakOrMic ? (
-              <div
-                style={{
-                  flexShrink: 0,
-                  borderTop: "1px solid rgba(11,18,32,0.1)",
-                  padding: 12,
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: 8,
-                }}
-              >
-                <button
-                  type="button"
-                  className="btn btnPrimary"
-                  disabled={voiceFollowupBusy || caddieLoading || listeningLastShot}
-                  onClick={() => void askCaddieVoiceFollowup()}
-                >
-                  {voiceFollowupBusy ? "Listening / thinking…" : "Ask anything (voice)"}
-                </button>
-                <div style={{ fontSize: 12, color: "rgba(11,18,32,0.55)", lineHeight: 1.35 }}>
-                  Tap, then ask your question out loud — the caddie answers with voice automatically.
+          </div>
+        </div>
+      ) : null}
+
+      {showVoiceAsk ? (
+        <div
+          className="modalOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Ask the caddie"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowVoiceAsk(false);
+          }}
+        >
+          <div
+            className="modalCard"
+            style={{
+              maxHeight: "82dvh",
+              width: "min(100%, 420px)",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
+            <div className="modalHeader">
+              <div>
+                <div className="modalTitle">Ask the caddie</div>
+                <div className="modalSub">
+                  Hole {holeNum} · {course?.name ?? courseId}
                 </div>
               </div>
+              <button type="button" className="btn modalClose" onClick={() => setShowVoiceAsk(false)}>
+                Close
+              </button>
+            </div>
+            <div style={{ flex: 1, minHeight: 160, overflow: "auto", padding: "0 12px 8px" }}>
+              {voiceThread.length === 0 && !voiceAskBusy ? (
+                <p style={{ margin: "12px 0", fontSize: 14, opacity: 0.75, lineHeight: 1.45 }}>
+                  Tap “Speak turn” below. Each exchange is shown here; the caddie remembers earlier lines when you speak
+                  again.
+                </p>
+              ) : null}
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {voiceThread.map((m) => (
+                  <div
+                    key={m.id}
+                    style={{
+                      alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                      maxWidth: "92%",
+                      padding: "10px 12px",
+                      borderRadius: 12,
+                      background:
+                        m.role === "user" ? "rgba(22, 163, 74, 0.12)" : "rgba(11,18,32,0.06)",
+                      border:
+                        m.role === "user" ? "1px solid rgba(22,163,74,0.28)" : "1px solid rgba(11,18,32,0.1)",
+                      fontSize: 14,
+                      lineHeight: 1.45,
+                      whiteSpace: "pre-wrap",
+                      color: "rgba(11,18,32,0.92)",
+                    }}
+                  >
+                    <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: "0.08em", opacity: 0.55 }}>
+                      {m.role === "user" ? "YOU" : "CADDIE"}
+                    </div>
+                    {m.content}
+                  </div>
+                ))}
+                <div ref={voiceScrollAnchorRef} aria-hidden />
+              </div>
+            </div>
+            {voiceAskErr ? (
+              <div style={{ padding: "0 12px", fontSize: 13, color: "#b91c1c" }}>{voiceAskErr}</div>
             ) : null}
+            <div style={{ flexShrink: 0, borderTop: "1px solid rgba(11,18,32,0.1)", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+              {!effectivePos ? (
+                <div className="metricSub" style={{ fontSize: 12 }}>
+                  Turn on location (live) or finish map load (sim) to use voice.
+                </div>
+              ) : null}
+              <button
+                type="button"
+                className="btn btnPrimary"
+                disabled={voiceAskBusy || !effectivePos}
+                onClick={() => void runVoiceConversationTurn()}
+              >
+                {voiceAskBusy ? "Listening…" : "Speak turn"}
+              </button>
+              {ttsLoading ? (
+                <div className="metricSub" style={{ fontSize: 12 }} aria-live="polite">
+                  Playing caddie voice…
+                </div>
+              ) : null}
+              {ttsErr ? <div style={{ fontSize: 12, color: "#b91c1c" }}>{ttsErr}</div> : null}
+            </div>
           </div>
         </div>
       ) : null}

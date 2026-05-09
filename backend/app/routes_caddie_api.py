@@ -3,7 +3,8 @@ from __future__ import annotations
 import json
 import os
 import re
-from typing import Annotated, Any
+from dataclasses import dataclass
+from typing import Annotated, Any, Literal
 
 import anthropic
 import psycopg
@@ -28,9 +29,11 @@ from .caddie_advice_llm import run_caddie_advice_chain
 from .caddie_voice_llm import (
     best_bag_key_for_extraction,
     extract_shot_feedback_json,
+    format_voice_hole_situation,
     generate_last_shot_question,
     refine_bag_carry,
     voice_followup_answer,
+    voice_thread_reply,
 )
 from .deps import get_conn, get_current_user
 
@@ -121,6 +124,25 @@ class VoiceFollowupOut(BaseModel):
     answer_summary: str
 
 
+class VoiceConvMessageIn(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(..., min_length=1, max_length=4000)
+
+
+class VoiceConversationTurnIn(BaseModel):
+    course_id: str = Field(min_length=1, max_length=128)
+    hole_number: int = Field(ge=1, le=18)
+    player_lat: float = Field(ge=-90, le=90)
+    player_lon: float = Field(ge=-180, le=180)
+    bend_lat: float | None = Field(default=None)
+    bend_lon: float | None = Field(default=None)
+    messages: list[VoiceConvMessageIn] = Field(..., min_length=1, max_length=48)
+
+
+class VoiceConversationTurnOut(BaseModel):
+    answer_summary: str
+
+
 class SuggestTargetIn(BaseModel):
     course_id: str = Field(min_length=1, max_length=128)
     hole_number: int = Field(ge=1, le=18)
@@ -171,6 +193,86 @@ _LANDING_HINT: dict[str, str] = {
 def _landing_hint_human(meta: dict[str, Any]) -> str:
     how = str(meta.get("how") or "")
     return _LANDING_HINT.get(how, "Current aiming plan from the hole map.")[:160]
+
+
+@dataclass(frozen=True)
+class _VoiceGrounding:
+    course_name: str | None
+    hole_number: int
+    par: int | None
+    plays_like_yds: float
+    lie_label: str
+    landing_hint: str
+
+
+def _resolve_voice_grounding(
+    conn: psycopg.Connection,
+    user_id: int,
+    *,
+    course_id: str,
+    hole_number: int,
+    player_lat: float,
+    player_lon: float,
+    bend_lat: float | None,
+    bend_lon: float | None,
+) -> _VoiceGrounding:
+    s = _get_user_settings(conn, user_id)
+    bag = dict(s["bag"] or {})
+    hcp = float(s["handicap_index"])
+    course = course_data_mod.COURSES.get(course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Unknown course_id")
+    holes = course.get("holes") or []
+    if hole_number < 1 or hole_number > len(holes):
+        raise HTTPException(status_code=404, detail="Invalid hole_number")
+    hole_dict = holes[hole_number - 1]
+    try:
+        features_for_lie = course_features.load_hole_feature_collection(course_id, hole_number)
+    except Exception:
+        features_for_lie = {"type": "FeatureCollection", "features": []}
+    lie_auto, _lm = classify_lie_from_blue_dot(
+        player_lat,
+        player_lon,
+        hole_dict,
+        features_for_lie,
+    )
+    payload = get_hole(
+        course_id=course_id,
+        hole_number=hole_number,
+        player_lat=player_lat,
+        player_lon=player_lon,
+        handicap=hcp,
+        lie=lie_auto,
+    )
+    hole_full = payload["hole"]
+    metrics = payload["metrics"]
+    gc = hole_full["green_center"]
+    plays_like_val = metrics.get("plays_like_yd")
+    plays_like = float(plays_like_val) if plays_like_val is not None else 0.0
+    _llat, _llon, lmeta = resolve_intended_landing(
+        player_lat,
+        player_lon,
+        float(gc["lat"]),
+        float(gc["lon"]),
+        bend_lat,
+        bend_lon,
+        bag,
+        hole_full,
+        lie_auto,
+        float(metrics.get("distance_yd") or 0.0),
+    )
+    crs_nm = (payload.get("course") or {}).get("name")
+    landing_h = _landing_hint_human(lmeta if isinstance(lmeta, dict) else {})
+    par_hint = hole_full.get("par")
+    par_out = int(par_hint) if isinstance(par_hint, (int, float)) else None
+    return _VoiceGrounding(
+        course_name=crs_nm or course.get("name"),
+        hole_number=int(hole_number),
+        par=par_out,
+        plays_like_yds=plays_like,
+        lie_label=str(lie_auto),
+        landing_hint=landing_h,
+    )
 
 
 def _validate_bend(body: CaddieAdviceIn) -> None:
@@ -612,69 +714,69 @@ def caddie_voice_followup(
 ) -> VoiceFollowupOut:
     _validate_bend_pair(body.bend_lat, body.bend_lon)
     uid = int(user["id"])
-    s = _get_user_settings(conn, uid)
-    bag = dict(s["bag"] or {})
-    hcp = float(s["handicap_index"])
-
-    course = course_data_mod.COURSES.get(body.course_id)
-    if not course:
-        raise HTTPException(status_code=404, detail="Unknown course_id")
-    holes = course.get("holes") or []
-    if body.hole_number < 1 or body.hole_number > len(holes):
-        raise HTTPException(status_code=404, detail="Invalid hole_number")
-    hole_dict = holes[body.hole_number - 1]
-
-    try:
-        features_for_lie = course_features.load_hole_feature_collection(body.course_id, body.hole_number)
-    except Exception:
-        features_for_lie = {"type": "FeatureCollection", "features": []}
-
-    lie_auto, _lie_meta_voice = classify_lie_from_blue_dot(
-        body.player_lat,
-        body.player_lon,
-        hole_dict,
-        features_for_lie,
-    )
-
-    payload = get_hole(
+    g = _resolve_voice_grounding(
+        conn,
+        uid,
         course_id=body.course_id,
         hole_number=body.hole_number,
         player_lat=body.player_lat,
         player_lon=body.player_lon,
-        handicap=hcp,
-        lie=lie_auto,
+        bend_lat=body.bend_lat,
+        bend_lon=body.bend_lon,
     )
-    hole_full = payload["hole"]
-    metrics = payload["metrics"]
-    gc = hole_full["green_center"]
-    plays_like_val = metrics.get("plays_like_yd")
-    plays_like = float(plays_like_val) if plays_like_val is not None else 0.0
-    llat, llon, lmeta = resolve_intended_landing(
-        body.player_lat,
-        body.player_lon,
-        float(gc["lat"]),
-        float(gc["lon"]),
-        body.bend_lat,
-        body.bend_lon,
-        bag,
-        hole_full,
-        lie_auto,
-        float(metrics.get("distance_yd") or 0.0),
-    )
-    crs_nm = (payload.get("course") or {}).get("name")
-
-    landing_h = _landing_hint_human(lmeta if isinstance(lmeta, dict) else {})
     ans = voice_followup_answer(
         question=body.question,
-        course_name=crs_nm or course.get("name"),
-        hole_number=int(body.hole_number),
-        par=int(hole_full["par"]) if isinstance(hole_full.get("par"), (int, float)) else None,
-        plays_like_yds=plays_like,
-        lie_label=str(lie_auto),
-        landing_hint=landing_h,
+        course_name=g.course_name,
+        hole_number=g.hole_number,
+        par=g.par,
+        plays_like_yds=g.plays_like_yds,
+        lie_label=g.lie_label,
+        landing_hint=g.landing_hint,
         brief_advice_snippet=body.advice_summary_recent,
     )
     return VoiceFollowupOut(answer_summary=ans.strip())
+
+
+@router.post("/voice-conversation-turn", response_model=VoiceConversationTurnOut)
+def caddie_voice_conversation_turn(
+    body: VoiceConversationTurnIn,
+    user: Annotated[dict, Depends(get_current_user)],
+    conn: Annotated[psycopg.Connection, Depends(get_conn)],
+) -> VoiceConversationTurnOut:
+    _validate_bend_pair(body.bend_lat, body.bend_lon)
+    if body.messages[-1].role != "user":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="The last message in `messages` must be from the player (role: user).",
+        )
+    total_chars = sum(len(m.content) for m in body.messages)
+    if total_chars > 24_000:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Conversation is too long; close and open a new ask session.",
+        )
+    uid = int(user["id"])
+    g = _resolve_voice_grounding(
+        conn,
+        uid,
+        course_id=body.course_id,
+        hole_number=body.hole_number,
+        player_lat=body.player_lat,
+        player_lon=body.player_lon,
+        bend_lat=body.bend_lat,
+        bend_lon=body.bend_lon,
+    )
+    situation = format_voice_hole_situation(
+        course_name=g.course_name,
+        hole_number=g.hole_number,
+        par=g.par,
+        plays_like_yds=g.plays_like_yds,
+        lie_label=g.lie_label,
+        landing_hint=g.landing_hint,
+    )
+    transcript = [(m.role, m.content) for m in body.messages]
+    ans = voice_thread_reply(situation=situation, transcript=transcript)
+    return VoiceConversationTurnOut(answer_summary=ans.strip())
 
 
 @router.post("/tts")
