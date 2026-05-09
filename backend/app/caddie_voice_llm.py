@@ -87,6 +87,29 @@ def extract_shot_feedback_json(
         return {"club_used_key": "", "outcome": transcript[:280], "estimated_carry_yards": None}
 
 
+_SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+")
+
+
+def _one_spoken_sentence(raw: str, *, max_chars: int = 260) -> str:
+    """Force a single crisp sentence for voice TTS."""
+    t = (raw or "").strip()
+    if not t:
+        return t
+    t = re.sub(r"^[\s\"'*`]+|[\s\"'*`]+$", "", t)
+    parts = _SENTENCE_SPLIT.split(t, maxsplit=1)
+    one = parts[0].strip()
+    # Drop common hedges so the reply leads with the actual answer.
+    one = re.sub(
+        r"^(?:great question|good question|sure|okay|yeah|yes)\s*[,.:-]?\s*",
+        "",
+        one,
+        flags=re.IGNORECASE,
+    ).strip()
+    if len(one) > max_chars:
+        one = one[: max_chars - 1].rsplit(" ", 1)[0].rstrip(",;:") + "…"
+    return one
+
+
 def voice_followup_answer(
     *,
     question: str,
@@ -98,27 +121,36 @@ def voice_followup_answer(
     landing_hint: str,
     brief_advice_snippet: str | None,
 ) -> str:
-    """Short spoken-style answer to an ad-hoc player question."""
+    """One direct sentence answering the player's follow-up question (voice)."""
     sys = (
-        "You are a seasoned golf caddie. Reply with ONE conversational paragraph suitable for voice, under "
-        "500 characters: clear, actionable, no bullet list, no role-play labels."
+        "You answer a golfer who just asked ONE follow-up question after getting on-course advice.\n"
+        "Rules:\n"
+        "- Reply with exactly ONE sentence. No lists, no second sentence, no 'firstly/also'.\n"
+        "- Answer their question DIRECTLY as the MAIN point of that sentence — not a preamble, not a tangent.\n"
+        "- Use the situation context ONLY if needed to answer; do not recap advice they did not ask about.\n"
+        "- Conversational tone, spoken aloud; max ~240 characters preferred.\n"
+        "- Never start with 'As a caddie' or 'I'd suggest' fluff unless the answer needs it."
     )
     crs = course_name.strip() if course_name else ""
+    segs = [f"Hole {hole_number}"]
+    if par is not None:
+        segs.append(f"par {par}")
+    if plays_like_yds is not None:
+        segs.append(f"~{round(plays_like_yds)} yd plays-like to pin")
+    hole_line = ", ".join(segs) + "."
     ctx = (
-        f"Course: {crs}. " if crs else ""
-    ) + (
-        f"Hole {hole_number}"
-        + (f" par-{par}" if par is not None else "")
-        + (
-            f", ~{round(plays_like_yds)} yards (plays-like) to pin." if plays_like_yds is not None else "."
-        )
-        + f" Lie: {lie_label}. Aim / landing cue: {landing_hint}.\n"
+        "(Background — use only what's needed to answer their question; do not recap unrelated topics.)\n"
+        + (f"Course: {crs}. " if crs else "")
+        + hole_line
+        + "\n"
+        + f"Lie: {lie_label}. Aim: {landing_hint}.\n"
     )
     hint = ""
     if brief_advice_snippet and brief_advice_snippet.strip():
-        hint = f"Fresh written advice summary snippet (trust if relevant):\n{brief_advice_snippet.strip()[:900]}\n\n"
-    usr = hint + ctx + f"Player question (voice):\n{question.strip()}"
-    return _call_text(sys, usr, max_tokens=300)
+        hint = f"Earlier advice excerpt (ONLY if directly relevant):\n{brief_advice_snippet.strip()[:500]}\n\n"
+    usr = hint + ctx + f"Their question:\n{question.strip()}"
+    raw = _call_text(sys, usr, max_tokens=150)
+    return _one_spoken_sentence(raw)
 
 
 _slug_key_re = re.compile(r"[^a-z0-9]")
