@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Annotated, Any
 
 import psycopg
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel, Field
 
 from .bag_selection import normalize_shot_shapes
@@ -23,6 +24,103 @@ class UserSettingsIn(BaseModel):
     handicap_index: float | None = Field(default=None, ge=0.0, le=54.0)
     bag: dict[str, Any] | None = None
     shot_shapes: dict[str, Any] | None = None
+
+
+class ShotHistoryItem(BaseModel):
+    id: int
+    round_id: int | None = None
+    course_id: str
+    hole: int
+    shot_number: int
+    club: str
+    distance_to_pin_before: int | None = None
+    distance_achieved: int | None = None
+    lie: str | None = None
+    shot_shape: str | None = None
+    result: str | None = None
+    notes: str | None = None
+    proximity_ft: int | None = None
+    logged_at: str
+    recommended_club: str | None = None
+    advised_plays_like_yd: float | None = None
+    feedback_transcript: str | None = None
+
+
+def _iso(ts: datetime | Any) -> str:
+    if ts is None:
+        return ""
+    if isinstance(ts, datetime):
+        return ts.isoformat()
+    return str(ts)
+
+
+@router.get("/shots", response_model=list[ShotHistoryItem])
+def list_shot_history(
+    user: Annotated[dict, Depends(get_current_user)],
+    conn: Annotated[psycopg.Connection, Depends(get_conn)],
+    limit: Annotated[int, Query(ge=1, le=500)] = 200,
+) -> list[ShotHistoryItem]:
+    """Logged shots for the current user (caddie feedback, round shots, newest first).
+
+    Requires migration `004_shot_feedback_postgres.sql` for optional columns; otherwise use base `shots` columns only.
+    """
+    uid = int(user["id"])
+    try:
+        rows = conn.execute(
+            """
+            SELECT id, round_id, course_id, hole, shot_number, club,
+                   distance_to_pin_before, distance_achieved, lie, shot_shape, result, notes, proximity_ft, logged_at,
+                   recommended_club, advised_plays_like_yd, feedback_transcript
+            FROM shots
+            WHERE user_id = %s
+            ORDER BY logged_at DESC
+            LIMIT %s
+            """,
+            (uid, limit),
+        ).fetchall()
+    except Exception as e:
+        err = str(e).lower()
+        if "undefined_column" not in err and "does not exist" not in err:
+            raise
+        rows = conn.execute(
+            """
+            SELECT id, round_id, course_id, hole, shot_number, club,
+                   distance_to_pin_before, distance_achieved, lie, shot_shape, result, notes, proximity_ft, logged_at,
+                   NULL::text AS recommended_club,
+                   NULL::double precision AS advised_plays_like_yd,
+                   NULL::text AS feedback_transcript
+            FROM shots
+            WHERE user_id = %s
+            ORDER BY logged_at DESC
+            LIMIT %s
+            """,
+            (uid, limit),
+        ).fetchall()
+    out: list[ShotHistoryItem] = []
+    for r in rows:
+        adv = r.get("advised_plays_like_yd")
+        out.append(
+            ShotHistoryItem(
+                id=int(r["id"]),
+                round_id=int(r["round_id"]) if r.get("round_id") is not None else None,
+                course_id=str(r["course_id"]),
+                hole=int(r["hole"]),
+                shot_number=int(r["shot_number"]),
+                club=str(r["club"]),
+                distance_to_pin_before=r.get("distance_to_pin_before"),
+                distance_achieved=r.get("distance_achieved"),
+                lie=r.get("lie"),
+                shot_shape=r.get("shot_shape"),
+                result=r.get("result"),
+                notes=r.get("notes"),
+                proximity_ft=r.get("proximity_ft"),
+                logged_at=_iso(r.get("logged_at")),
+                recommended_club=r.get("recommended_club"),
+                advised_plays_like_yd=float(adv) if adv is not None else None,
+                feedback_transcript=r.get("feedback_transcript"),
+            )
+        )
+    return out
 
 
 @router.get("/settings", response_model=UserSettingsOut)

@@ -142,7 +142,7 @@ export default function RoundDetailPage() {
 
   if (!round) {
     return (
-      <main className="pageScrollLight">
+      <main style={{ margin: 0 }}>
         <p>{error ? <span style={{ color: "crimson" }}>{error}</span> : "Loading…"}</p>
         <p>
           <Link href="/rounds">Back</Link>
@@ -152,7 +152,7 @@ export default function RoundDetailPage() {
   }
 
   return (
-    <main className="pageScrollLight" style={{ maxWidth: 860, margin: "0 auto" }}>
+    <main style={{ margin: 0 }}>
       <h1 style={{ marginTop: 0 }}>
         Round #{round.id} — {round.course_id}
       </h1>
