@@ -12,7 +12,7 @@ export default function HomePage() {
             Settings
           </a>
           <a className="landingBtn" href="/rounds">
-            Past rounds
+            Past Rounds
           </a>
         </div>
       </div>

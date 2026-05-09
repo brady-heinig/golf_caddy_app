@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 
 from .caddie_advice_context import build_caddie_advice_context
 from .caddie_lie_detect import classify_lie_from_blue_dot
-from .caddie_shot_intel import gather_shot_intel, resolve_intended_landing
+from .caddie_shot_intel import resolve_intended_landing
 from .elevenlabs_tts import synthesize_speech_mp3
 from .legacy import course_data as course_data_mod
 from .legacy import course_features
@@ -25,6 +25,13 @@ from .bag_selection import (
     shot_shape_for_club,
 )
 from .caddie_advice_llm import run_caddie_advice_chain
+from .caddie_voice_llm import (
+    best_bag_key_for_extraction,
+    extract_shot_feedback_json,
+    generate_last_shot_question,
+    refine_bag_carry,
+    voice_followup_answer,
+)
 from .deps import get_conn, get_current_user
 
 router = APIRouter(prefix="/caddie", tags=["caddie"])
@@ -64,11 +71,54 @@ class CaddieAdviceOut(BaseModel):
     assistant: str = Field(
         description="Full legacy text: briefing + --- + SUMMARY: summary (for older clients)",
     )
+    recommended_club: str = Field(default="Unknown", description="Club label from bag selection for plays-like yards")
+    plays_like_context_yd: float = Field(default=0.0, ge=0.0, description="Adjusted plays-like context for that hint")
 
 
 class CaddieTtsIn(BaseModel):
     text: str = Field(min_length=1, max_length=8000)
     voice_id: str | None = Field(default=None, max_length=64)
+
+
+class PrepLastShotIn(BaseModel):
+    course_id: str = Field(min_length=1, max_length=128)
+    hole_number: int = Field(ge=1, le=18)
+    recommended_club: str = Field("", max_length=64)
+    plays_like_context_yd: float = Field(ge=0.0, le=700.0)
+
+
+class PrepLastShotOut(BaseModel):
+    question: str
+
+
+class LogShotFeedbackIn(BaseModel):
+    course_id: str = Field(min_length=1, max_length=128)
+    hole_number: int = Field(ge=1, le=18)
+    transcript: str = Field(min_length=1, max_length=4000)
+    prior_recommended_club: str = Field("", max_length=64)
+    prior_plays_like_yd: float = Field(ge=0.0, le=700.0)
+
+
+class LogShotFeedbackOut(BaseModel):
+    logged: bool
+    club_normalized: str | None = None
+    outcome: str | None = None
+    bag_updated: bool = False
+
+
+class VoiceFollowupIn(BaseModel):
+    course_id: str = Field(min_length=1, max_length=128)
+    hole_number: int = Field(ge=1, le=18)
+    player_lat: float = Field(ge=-90, le=90)
+    player_lon: float = Field(ge=-180, le=180)
+    bend_lat: float | None = Field(default=None)
+    bend_lon: float | None = Field(default=None)
+    question: str = Field(min_length=2, max_length=2000)
+    advice_summary_recent: str | None = Field(default=None, max_length=2000)
+
+
+class VoiceFollowupOut(BaseModel):
+    answer_summary: str
 
 
 class SuggestTargetIn(BaseModel):
@@ -98,11 +148,47 @@ def _get_user_settings(conn: psycopg.Connection, user_id: int) -> dict[str, Any]
     return {"handicap_index": float(h), "bag": bag, "shot_shapes": shot_shapes}
 
 
+def _next_feedback_shot_number(conn: psycopg.Connection, user_id: int, course_id: str) -> int:
+    row = conn.execute(
+        """
+        SELECT COALESCE(MAX(shot_number), 0) + 1 AS n
+        FROM shots
+        WHERE user_id = %s AND course_id = %s AND round_id IS NULL
+        """,
+        (user_id, course_id),
+    ).fetchone()
+    return int(row["n"]) if row else 1
+
+
+_LANDING_HINT: dict[str, str] = {
+    "map_bend": "Target is your mapped white aiming point.",
+    "modeled_tee_carry": "Tee shot carry corridor.",
+    "tee_par3_toward_green": "Par-three into the green.",
+    "default_fraction_along_pin": "Default fractional target toward the pin.",
+}
+
+
+def _landing_hint_human(meta: dict[str, Any]) -> str:
+    how = str(meta.get("how") or "")
+    return _LANDING_HINT.get(how, "Current aiming plan from the hole map.")[:160]
+
+
 def _validate_bend(body: CaddieAdviceIn) -> None:
     has_b = body.bend_lat is not None or body.bend_lon is not None
     if not has_b:
         return
     if body.bend_lat is None or body.bend_lon is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Provide both bend_lat and bend_lon, or omit both.",
+        )
+
+
+def _validate_bend_pair(lat: float | None, lon: float | None) -> None:
+    has_b = lat is not None or lon is not None
+    if not has_b:
+        return
+    if lat is None or lon is None:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide both bend_lat and bend_lon, or omit both.",
@@ -378,7 +464,217 @@ def caddie_advice(
             detail=f"Caddie unavailable: {e}",
         ) from e
 
-    return CaddieAdviceOut(briefing=briefing, summary=summary_plain, assistant=assistant)
+    return CaddieAdviceOut(
+        briefing=briefing,
+        summary=summary_plain,
+        assistant=assistant,
+        recommended_club=str(club_pick.get("club") or "Unknown"),
+        plays_like_context_yd=plays_like,
+    )
+
+
+@router.post("/prep-last-shot", response_model=PrepLastShotOut)
+def prep_last_shot_feedback(
+    body: PrepLastShotIn,
+    _user: Annotated[dict, Depends(get_current_user)],
+) -> PrepLastShotOut:
+    crs = course_data_mod.COURSES.get(body.course_id)
+    crs_nm = crs.get("name") if crs else None
+    try:
+        q = generate_last_shot_question(
+            recommended_club=(body.recommended_club or "recommended club"),
+            plays_like_yd=float(body.plays_like_context_yd),
+            hole_number=int(body.hole_number),
+            course_hint=crs_nm,
+        )
+    except Exception:
+        q = (
+            f"Quick one — last time on hole {body.hole_number} I lined you up at about "
+            f"{body.plays_like_context_yd:.0f} yards: what'd you hit, and how'd it turn out?"
+        )
+    q = q.strip() or (
+        "What club did you hit on that last swing, and how did the ball react?"
+    )
+    return PrepLastShotOut(question=q[:340])
+
+
+@router.post("/log-last-shot-feedback", response_model=LogShotFeedbackOut)
+def log_last_shot_feedback(
+    body: LogShotFeedbackIn,
+    user: Annotated[dict, Depends(get_current_user)],
+    conn: Annotated[psycopg.Connection, Depends(get_conn)],
+) -> LogShotFeedbackOut:
+    uid = int(user["id"])
+    s = _get_user_settings(conn, uid)
+    bag_raw = dict(s["bag"] or {})
+    bag_keys = sorted(str(k) for k in bag_raw.keys())
+
+    extracted: dict[str, Any] = {}
+    try:
+        extracted = extract_shot_feedback_json(
+            transcript=(body.transcript or "").strip(),
+            recommended_club=str(body.prior_recommended_club or "unknown"),
+            plays_like_yd=float(body.prior_plays_like_yd),
+            allowed_bag_clubs=(bag_keys if bag_keys else ["Driver", "7i", "PW"]),
+            hole_number=int(body.hole_number),
+        )
+        if not isinstance(extracted, dict):
+            extracted = {}
+    except Exception:
+        extracted = {}
+
+    cand = extracted.get("club_used_key") or extracted.get("club_used") or ""
+    club_key_final = (
+        best_bag_key_for_extraction(str(cand), bag_keys) if isinstance(cand, str) else None
+    )
+    if not club_key_final and isinstance(cand, str) and cand.strip():
+        club_key_final = cand.strip()[:32]
+
+    if not club_key_final:
+        club_key_final = "Unknown"
+
+    out_str = extracted.get("outcome")
+    outcome_s = (
+        str(out_str).strip()[:500]
+        if out_str not in (None, "")
+        else (body.transcript or "")[:500]
+    )
+    carry_est = extracted.get("estimated_carry_yards")
+    dist_ach: int | None
+    try:
+        dist_ach = int(round(float(carry_est))) if carry_est not in (None, "") else None
+    except (TypeError, ValueError):
+        dist_ach = None
+
+    sn = _next_feedback_shot_number(conn, uid, body.course_id)
+    dist_before = int(round(min(700.0, max(0.0, float(body.prior_plays_like_yd)))))
+
+    conn.execute(
+        """
+        INSERT INTO shots (
+            user_id, round_id, course_id, hole, shot_number,
+            club, distance_to_pin_before, distance_achieved, lie,
+            shot_shape, result, notes,
+            recommended_club, advised_plays_like_yd, feedback_transcript,
+            proximity_ft
+        )
+        VALUES (
+            %s, NULL, %s, %s, %s,
+            %s, %s, %s, %s,
+            %s, %s, %s,
+            %s, %s, %s,
+            NULL
+        )
+        """,
+        (
+            uid,
+            body.course_id,
+            body.hole_number,
+            sn,
+            club_key_final,
+            dist_before,
+            dist_ach,
+            "unknown",
+            "unknown",
+            outcome_s[:500],
+            (body.transcript or "")[:3800],
+            (body.prior_recommended_club or None),
+            float(body.prior_plays_like_yd),
+            (body.transcript or "")[:3800],
+        ),
+    )
+
+    bag_updated = False
+    if club_key_final in bag_raw and isinstance(bag_raw, dict) and dist_ach not in (None, 0):
+        new_bag, flipped = refine_bag_carry(dict(bag_raw), club_key_final, float(dist_ach))
+        if flipped:
+            conn.execute(
+                "UPDATE user_settings SET bag_json = %s, updated_at = now() WHERE user_id = %s",
+                (json.dumps(new_bag), uid),
+            )
+            bag_updated = True
+
+    conn.commit()
+
+    return LogShotFeedbackOut(
+        logged=True,
+        club_normalized=club_key_final,
+        outcome=outcome_s or None,
+        bag_updated=bag_updated,
+    )
+
+
+@router.post("/voice-followup", response_model=VoiceFollowupOut)
+def caddie_voice_followup(
+    body: VoiceFollowupIn,
+    user: Annotated[dict, Depends(get_current_user)],
+    conn: Annotated[psycopg.Connection, Depends(get_conn)],
+) -> VoiceFollowupOut:
+    _validate_bend_pair(body.bend_lat, body.bend_lon)
+    uid = int(user["id"])
+    s = _get_user_settings(conn, uid)
+    bag = dict(s["bag"] or {})
+    hcp = float(s["handicap_index"])
+
+    course = course_data_mod.COURSES.get(body.course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Unknown course_id")
+    holes = course.get("holes") or []
+    if body.hole_number < 1 or body.hole_number > len(holes):
+        raise HTTPException(status_code=404, detail="Invalid hole_number")
+    hole_dict = holes[body.hole_number - 1]
+
+    try:
+        features_for_lie = course_features.load_hole_feature_collection(body.course_id, body.hole_number)
+    except Exception:
+        features_for_lie = {"type": "FeatureCollection", "features": []}
+
+    lie_auto, _lie_meta_voice = classify_lie_from_blue_dot(
+        body.player_lat,
+        body.player_lon,
+        hole_dict,
+        features_for_lie,
+    )
+
+    payload = get_hole(
+        course_id=body.course_id,
+        hole_number=body.hole_number,
+        player_lat=body.player_lat,
+        player_lon=body.player_lon,
+        handicap=hcp,
+        lie=lie_auto,
+    )
+    hole_full = payload["hole"]
+    metrics = payload["metrics"]
+    gc = hole_full["green_center"]
+    plays_like_val = metrics.get("plays_like_yd")
+    plays_like = float(plays_like_val) if plays_like_val is not None else 0.0
+    llat, llon, lmeta = resolve_intended_landing(
+        body.player_lat,
+        body.player_lon,
+        float(gc["lat"]),
+        float(gc["lon"]),
+        body.bend_lat,
+        body.bend_lon,
+        bag,
+        hole_full,
+        lie_auto,
+        float(metrics.get("distance_yd") or 0.0),
+    )
+    crs_nm = (payload.get("course") or {}).get("name")
+
+    landing_h = _landing_hint_human(lmeta if isinstance(lmeta, dict) else {})
+    ans = voice_followup_answer(
+        question=body.question,
+        course_name=crs_nm or course.get("name"),
+        hole_number=int(body.hole_number),
+        par=int(hole_full["par"]) if isinstance(hole_full.get("par"), (int, float)) else None,
+        plays_like_yds=plays_like,
+        lie_label=str(lie_auto),
+        landing_hint=landing_h,
+        brief_advice_snippet=body.advice_summary_recent,
+    )
+    return VoiceFollowupOut(answer_summary=ans.strip())
 
 
 @router.post("/tts")

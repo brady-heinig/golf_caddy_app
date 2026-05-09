@@ -41,6 +41,7 @@ body {
 }
 
 .phoneFrame {
+  position: relative;
   width: min(100vw, var(--phoneW));
   height: min(100dvh, var(--phoneH));
   border-radius: 22px;
@@ -48,6 +49,48 @@ body {
   box-shadow: var(--shadow);
   border: 1px solid rgba(255, 255, 255, 0.12);
   background: rgba(11, 18, 32, 0.35);
+}
+
+.backToHome {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top, 0px));
+  left: max(12px, env(safe-area-inset-left, 0px));
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(11, 18, 32, 0.14);
+  background: rgba(255, 255, 255, 0.96);
+  color: #0b1220;
+  box-shadow: 0 2px 14px rgba(11, 18, 32, 0.14);
+  text-decoration: none;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.backToHome:hover {
+  background: #ffffff;
+  border-color: rgba(11, 18, 32, 0.22);
+}
+
+.backToHome:active {
+  transform: scale(0.96);
+}
+
+.backToHomeSvg {
+  display: block;
+  margin-left: -2px;
+}
+
+/* Space content so it does not sit under the back chip */
+.phoneFrame:has(> .backToHome) .phoneShell > .header > div:first-child {
+  padding-left: 44px;
+}
+
+.phoneFrame:has(> .backToHome) .modePickerShell .modePickerCard {
+  padding-top: 52px;
 }
 
 .pageScroll {
@@ -63,6 +106,13 @@ body {
   -webkit-overflow-scrolling: touch;
   background: #ffffff;
   color: #0b1220;
+  padding: 20px;
+  padding-top: 20px;
+  box-sizing: border-box;
+}
+
+.phoneFrame:has(> .backToHome) .pageScrollLight {
+  padding-top: 54px;
 }
 
 .pageScrollLight a {
@@ -94,6 +144,11 @@ body {
   background: #f4f6f8;
   color: #0b1220;
   cursor: pointer;
+}
+
+/* Global `label { color: var(--muted) }` is meant for dark caddie chrome; reset on light pages. */
+.pageScrollLight label {
+  color: #0b1220;
 }
 
 .landingPhone {

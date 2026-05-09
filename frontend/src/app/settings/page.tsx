@@ -90,10 +90,10 @@ export default function SettingsPage() {
     }
   }
 
-  if (loading) return <main className="pageScrollLight" style={{ padding: 20 }}>Loading…</main>;
+  if (loading) return <main className="pageScrollLight">Loading…</main>;
 
   return (
-    <main className="pageScrollLight" style={{ padding: 20, maxWidth: 760, margin: "0 auto" }}>
+    <main className="pageScrollLight" style={{ maxWidth: 760, margin: "0 auto" }}>
       <h1 style={{ marginTop: 0 }}>Settings</h1>
       <section style={{ display: "grid", gap: 10, marginBottom: 18 }}>
         <label>
@@ -110,17 +110,14 @@ export default function SettingsPage() {
         </label>
       </section>
 
-      <h2 style={{ marginTop: 24 }}>Typical shot shape</h2>
-      <p style={{ marginTop: 6, opacity: 0.8 }}>
-        Used when you talk to the caddie: the app pairs your usual driver, fairway wood / hybrid, or iron bias with
-        the club it recommends from your bag.
-      </p>
-      <div style={{ display: "grid", gap: 14, maxWidth: 420 }}>
-        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span>Driver</span>
+      <h2 style={{ marginTop: 24 }}>Typical Shot Shape</h2>
+      <div style={{ display: "grid", gap: 12, maxWidth: 520 }}>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>Driver</span>
           <select
             value={shotShapes.driver}
             onChange={(e) => setShotShapes((s) => ({ ...s, driver: e.target.value }))}
+            aria-label="Typical shot shape with driver"
             style={{ padding: "8px 10px", minWidth: 140 }}
           >
             {SHAPE_OPTIONS.map((o) => (
@@ -130,11 +127,12 @@ export default function SettingsPage() {
             ))}
           </select>
         </label>
-        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span>Fairway woods &amp; hybrids</span>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>Fairway Woods &amp; Hybrids</span>
           <select
             value={shotShapes.woods}
             onChange={(e) => setShotShapes((s) => ({ ...s, woods: e.target.value }))}
+            aria-label="Typical shot shape with fairway woods and hybrids"
             style={{ padding: "8px 10px", minWidth: 140 }}
           >
             {SHAPE_OPTIONS.map((o) => (
@@ -144,11 +142,12 @@ export default function SettingsPage() {
             ))}
           </select>
         </label>
-        <label style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
-          <span>Irons &amp; wedges</span>
+        <label style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+          <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>Irons &amp; Wedges</span>
           <select
             value={shotShapes.irons}
             onChange={(e) => setShotShapes((s) => ({ ...s, irons: e.target.value }))}
+            aria-label="Typical shot shape with irons and wedges"
             style={{ padding: "8px 10px", minWidth: 140 }}
           >
             {SHAPE_OPTIONS.map((o) => (
@@ -160,10 +159,7 @@ export default function SettingsPage() {
         </label>
       </div>
 
-      <h2 style={{ marginTop: 28 }}>My bag</h2>
-      <p style={{ marginTop: 6, opacity: 0.8 }}>
-        Enter typical carry yardages. These seed the first club suggestion and get refined as you log shots.
-      </p>
+      <h2 style={{ marginTop: 28 }}>My Bag</h2>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 140px", gap: 10 }}>
         {DEFAULT_CLUBS.map((club) => (
           <div key={club} style={{ display: "contents" }}>

@@ -3,6 +3,7 @@
 // Port of `caddie/frontend/src/App.tsx` so we can host the same experience
 // inside the Vercel-ready Next.js app.
 
+import { listenOnce } from "@/lib/speechListen";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map, Marker } from "maplibre-gl";
 import * as turf from "@turf/turf";
@@ -21,7 +22,6 @@ type CourseDetail = {
 const ESRI_IMAGERY =
   "https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}";
 const SATELLITE_MAX_ZOOM = 18;
-const APPROACH_PIN_BEND_MAX_YD = 240;
 const MAP_FOLLOW_DURATION_MS = 480;
 
 type LL = { lat: number; lon: number };
@@ -115,10 +115,21 @@ function speechTextFromCaddieReply(full: string): string {
 }
 
 /** Uses structured briefing + summary when present; falls back to legacy `assistant` string. */
-function parseCaddieAdvicePayload(data: Record<string, unknown>): { briefing: string | null; summary: string | null } {
+function parseCaddieAdvicePayload(data: Record<string, unknown>): {
+  briefing: string | null;
+  summary: string | null;
+  meta: { recommendedClub: string; playsLikeContextYd: number };
+} {
   let briefing = typeof data.briefing === "string" ? data.briefing.trim() : "";
   let summary = typeof data.summary === "string" ? data.summary.trim() : "";
   const assistant = typeof data.assistant === "string" ? data.assistant.trim() : "";
+
+  const rcRaw = typeof data.recommended_club === "string" ? data.recommended_club.trim() : "Unknown";
+  const plyRaw =
+    typeof data.plays_like_context_yd === "number"
+      ? data.plays_like_context_yd
+      : Number(data.plays_like_context_yd);
+  const playsLikeContextYd = Number.isFinite(plyRaw) ? plyRaw : 0;
 
   if ((!briefing || !summary) && assistant) {
     const parts = assistant.split(/\n---\n/);
@@ -137,6 +148,10 @@ function parseCaddieAdvicePayload(data: Record<string, unknown>): { briefing: st
   return {
     briefing: briefing || null,
     summary: summary || null,
+    meta: {
+      recommendedClub: rcRaw || "Unknown",
+      playsLikeContextYd,
+    },
   };
 }
 
@@ -324,6 +339,20 @@ export function CaddieApp() {
   const [caddieErr, setCaddieErr] = useState<string | null>(null);
   const [caddieBriefing, setCaddieBriefing] = useState<string | null>(null);
   const [caddieSummary, setCaddieSummary] = useState<string | null>(null);
+  const [caddieFlowKey, setCaddieFlowKey] = useState(0);
+  const priorAdviceSnapRef = useRef<{
+    courseId: string;
+    holeNum: number;
+    playsLikeYd: number;
+    recommendedClub: string;
+  } | null>(null);
+  /** Lets “Try again” after a failed advice call skip the last-shot gate for that open only. */
+  const skipFeedbackGateOnceRef = useRef(false);
+  const [lastShotFeedbackPrompt, setLastShotFeedbackPrompt] = useState<string | null>(null);
+  const [lastShotAwaitingSpeakOrMic, setLastShotAwaitingSpeakOrMic] = useState(false);
+  const [listeningLastShot, setListeningLastShot] = useState(false);
+  const [voiceFollowupBusy, setVoiceFollowupBusy] = useState(false);
+  const [voiceFollowupAnswer, setVoiceFollowupAnswer] = useState<string | null>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsErr, setTtsErr] = useState<string | null>(null);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
@@ -738,62 +767,163 @@ export function CaddieApp() {
     }
   }, []);
 
-  const fetchCaddieAdvice = useCallback(async (opts?: { suggestTarget?: boolean }) => {
-    const pos = effectivePos;
-    if (!pos) {
-      setCaddieErr(
-        roundMode === "live" && liveGps == null
-          ? "Still acquiring GPS. Wait a few seconds or check location permissions."
-          : roundMode === "sim"
-            ? "Sim position not ready. Try again after the map loads."
-            : "Position unavailable.",
-      );
-      return;
-    }
-    setCaddieLoading(true);
+  /** Core advice POST (spoken summary). Saves prior-advice snapshot for the next modal open’s feedback gate. */
+  const fetchCaddieAdviceInternal = useCallback(
+    async (signal?: AbortSignal) => {
+      const pos = effectivePos;
+      if (!pos) {
+        setCaddieErr(
+          roundMode === "live" && liveGps == null
+            ? "Still acquiring GPS. Wait a few seconds or check location permissions."
+            : roundMode === "sim"
+              ? "Sim position not ready. Try again after the map loads."
+              : "Position unavailable.",
+        );
+        return;
+      }
+      setCaddieLoading(true);
+      setCaddieErr(null);
+      try {
+        const bend = bendMapRef.current;
+        const body: Record<string, unknown> = {
+          course_id: courseId,
+          hole_number: holeNum,
+          player_lat: pos.lat,
+          player_lon: pos.lon,
+        };
+        if (bend != null && Number.isFinite(bend.lat) && Number.isFinite(bend.lon)) {
+          body.bend_lat = bend.lat;
+          body.bend_lon = bend.lon;
+        }
+        const res = await fetch("/api/caddie/advice", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal,
+        });
+        const data: unknown = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          const detail = (data as { detail?: unknown }).detail;
+          const msg =
+            typeof detail === "string"
+              ? detail
+              : Array.isArray(detail)
+                ? (detail as { msg?: string }[]).map((d) => d?.msg ?? JSON.stringify(d)).join("; ")
+                : res.statusText;
+          throw new Error(msg || "Request failed");
+        }
+        const parsed = parseCaddieAdvicePayload(data as Record<string, unknown>);
+        setCaddieBriefing(parsed.briefing);
+        setCaddieSummary(parsed.summary);
+        priorAdviceSnapRef.current = {
+          courseId,
+          holeNum,
+          playsLikeYd: parsed.meta.playsLikeContextYd,
+          recommendedClub: parsed.meta.recommendedClub,
+        };
+        const summarySpeak = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
+        if (summarySpeak) await speakAdviceAutomatically(summarySpeak);
+      } catch (e) {
+        if ((e instanceof DOMException || e instanceof Error) && e.name === "AbortError") return;
+        setCaddieErr(e instanceof Error ? e.message : String(e));
+        setCaddieBriefing(null);
+        setCaddieSummary(null);
+      } finally {
+        setCaddieLoading(false);
+      }
+    },
+    [courseId, holeNum, effectivePos, roundMode, liveGps, speakAdviceAutomatically],
+  );
+
+  /** Retry advice only while the modal stays open after the feedback gate cleared. */
+  const fetchCaddieAdvice = useCallback(async () => {
+    skipFeedbackGateOnceRef.current = true;
+    await fetchCaddieAdviceInternal(undefined);
+  }, [fetchCaddieAdviceInternal]);
+
+  const skipLastShotFeedback = useCallback(async () => {
+    priorAdviceSnapRef.current = null;
+    setLastShotFeedbackPrompt(null);
+    setLastShotAwaitingSpeakOrMic(false);
+    setListeningLastShot(false);
+    setCaddieErr(null);
+    await fetchCaddieAdviceInternal(undefined);
+  }, [fetchCaddieAdviceInternal]);
+
+  const retryLastShotListen = useCallback(async () => {
+    if (!lastShotFeedbackPrompt?.trim()) return;
+    const ctrlListen = new AbortController();
     setCaddieErr(null);
     try {
-      const suggestFirst = opts?.suggestTarget ?? true;
-      if (suggestFirst) {
-        try {
-          const sr = await fetch("/api/caddie/suggest-target", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              course_id: courseId,
-              hole_number: holeNum,
-              player_lat: pos.lat,
-              player_lon: pos.lon,
-            }),
-          });
-          const sj = (await sr.json().catch(() => ({}))) as {
-            target_lat?: unknown;
-            target_lon?: unknown;
-            used_agent?: unknown;
-          };
-          const tlat = Number(sj.target_lat);
-          const tlon = Number(sj.target_lon);
-          if (sr.ok && Number.isFinite(tlat) && Number.isFinite(tlon)) {
-            approachBendUserDraggedRef.current = true;
-            mapInteractionRef.current?.updateDyn({ lat: tlat, lon: tlon });
-          }
-        } catch {
-          /* keep current white marker */
-        }
+      setListeningLastShot(true);
+      const transcript = await listenOnce({ signal: ctrlListen.signal });
+      const snap = priorAdviceSnapRef.current;
+      if (!snap?.courseId || snap.courseId !== courseId) {
+        await fetchCaddieAdviceInternal(undefined);
+        setLastShotAwaitingSpeakOrMic(false);
+        setLastShotFeedbackPrompt(null);
+        setListeningLastShot(false);
+        return;
       }
+      setCaddieLoading(true);
+      setLastShotAwaitingSpeakOrMic(false);
+      setLastShotFeedbackPrompt(null);
+      setListeningLastShot(false);
+      const logRes = await fetch("/api/caddie/log-last-shot-feedback", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          course_id: snap.courseId,
+          hole_number: snap.holeNum,
+          transcript,
+          prior_recommended_club: snap.recommendedClub,
+          prior_plays_like_yd: snap.playsLikeYd,
+        }),
+      });
+      if (!logRes.ok) {
+        const data: unknown = await logRes.json().catch(() => ({}));
+        const detail = (data as { detail?: unknown }).detail;
+        const msg =
+          typeof detail === "string"
+            ? detail
+            : Array.isArray(detail)
+              ? (detail as { msg?: string }[]).map((d) => d?.msg ?? JSON.stringify(d)).join("; ")
+              : logRes.statusText;
+        throw new Error(msg || "Save failed");
+      }
+      priorAdviceSnapRef.current = null;
+      await fetchCaddieAdviceInternal(undefined);
+    } catch (e) {
+      setCaddieErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setListeningLastShot(false);
+      setCaddieLoading(false);
+    }
+  }, [courseId, fetchCaddieAdviceInternal, lastShotFeedbackPrompt]);
 
+  const askCaddieVoiceFollowup = useCallback(async () => {
+    const pos = effectivePos;
+    if (!pos) return;
+    setVoiceFollowupBusy(true);
+    setVoiceFollowupAnswer(null);
+    setCaddieErr(null);
+    try {
       const bend = bendMapRef.current;
+      const q = await listenOnce({});
+      if (!q.trim()) throw new Error("No question heard.");
       const body: Record<string, unknown> = {
         course_id: courseId,
         hole_number: holeNum,
         player_lat: pos.lat,
         player_lon: pos.lon,
+        question: q,
+        advice_summary_recent: (caddieSummary ?? "").trim().slice(0, 900) || null,
       };
       if (bend != null && Number.isFinite(bend.lat) && Number.isFinite(bend.lon)) {
         body.bend_lat = bend.lat;
         body.bend_lon = bend.lon;
       }
-      const res = await fetch("/api/caddie/advice", {
+      const res = await fetch("/api/caddie/voice-followup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -807,32 +937,149 @@ export function CaddieApp() {
             : Array.isArray(detail)
               ? (detail as { msg?: string }[]).map((d) => d?.msg ?? JSON.stringify(d)).join("; ")
               : res.statusText;
-        throw new Error(msg || "Request failed");
+        throw new Error(msg || "Follow-up failed");
       }
-      const parsed = parseCaddieAdvicePayload(data as Record<string, unknown>);
-      setCaddieBriefing(parsed.briefing);
-      setCaddieSummary(parsed.summary);
-      const summarySpeak = typeof parsed.summary === "string" ? parsed.summary.trim() : "";
-      if (summarySpeak) void speakAdviceAutomatically(summarySpeak);
+      const ans = typeof (data as { answer_summary?: unknown }).answer_summary === "string" ? (data as { answer_summary: string }).answer_summary.trim() : "";
+      if (!ans) throw new Error("Empty response.");
+      setVoiceFollowupAnswer(ans);
+      await speakAdviceAutomatically(ans);
     } catch (e) {
       setCaddieErr(e instanceof Error ? e.message : String(e));
-      setCaddieBriefing(null);
-      setCaddieSummary(null);
     } finally {
-      setCaddieLoading(false);
+      setVoiceFollowupBusy(false);
     }
-  }, [courseId, holeNum, effectivePos, roundMode, liveGps, speakAdviceAutomatically]);
+  }, [caddieSummary, courseId, effectivePos, holeNum, speakAdviceAutomatically]);
 
   useEffect(() => {
     if (!showCaddieAdvice) return;
-    void fetchCaddieAdvice({ suggestTarget: true });
-  }, [showCaddieAdvice, fetchCaddieAdvice]);
+    const ctrl = new AbortController();
+    let aborted = false;
+
+    (async () => {
+      const pos = effectivePos;
+      if (!pos) {
+        setCaddieErr(
+          roundMode === "live" && liveGps == null
+            ? "Still acquiring GPS. Wait a few seconds or check location permissions."
+            : roundMode === "sim"
+              ? "Sim position not ready. Try again after the map loads."
+              : "Position unavailable.",
+        );
+        return;
+      }
+
+      const skipGateOnce = skipFeedbackGateOnceRef.current;
+      skipFeedbackGateOnceRef.current = false;
+      const snap = priorAdviceSnapRef.current;
+      const gate = !!(snap && snap.courseId === courseId && !skipGateOnce);
+
+      if (gate && snap) {
+        let promptReady = false;
+        setCaddieErr(null);
+        setLastShotAwaitingSpeakOrMic(true);
+        setLastShotFeedbackPrompt(null);
+        setListeningLastShot(false);
+        try {
+          const prepRes = await fetch("/api/caddie/prep-last-shot", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              course_id: snap.courseId,
+              hole_number: snap.holeNum,
+              recommended_club: snap.recommendedClub,
+              plays_like_context_yd: snap.playsLikeYd,
+            }),
+            signal: ctrl.signal,
+          });
+          const prepJson = (await prepRes.json().catch(() => ({}))) as { question?: string };
+          if (!prepRes.ok) throw new Error("Could not start follow-up.");
+          const qRaw = typeof prepJson.question === "string" ? prepJson.question.trim() : "";
+          if (aborted) return;
+          const qShow =
+            qRaw ||
+            `Quick check on hole ${snap.holeNum} — what club did you hit last shot, and how did it turn out?`;
+          setLastShotFeedbackPrompt(qShow);
+          promptReady = true;
+          await speakAdviceAutomatically(qShow);
+          if (aborted) return;
+          let transcript = "";
+          try {
+            setListeningLastShot(true);
+            transcript = await listenOnce({ signal: ctrl.signal });
+          } finally {
+            setListeningLastShot(false);
+          }
+          if (aborted) return;
+          const t = transcript.trim();
+          if (!t) throw new Error("I didn’t catch that — retry the mic or skip.");
+          const logRes = await fetch("/api/caddie/log-last-shot-feedback", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              course_id: snap.courseId,
+              hole_number: snap.holeNum,
+              transcript: t,
+              prior_recommended_club: snap.recommendedClub,
+              prior_plays_like_yd: snap.playsLikeYd,
+            }),
+          });
+          if (!logRes.ok) {
+            const data: unknown = await logRes.json().catch(() => ({}));
+            const detail = (data as { detail?: unknown }).detail;
+            const msg =
+              typeof detail === "string"
+                ? detail
+                : Array.isArray(detail)
+                  ? (detail as { msg?: string }[]).map((d) => d?.msg ?? JSON.stringify(d)).join("; ")
+                  : logRes.statusText;
+            throw new Error(msg || "Save failed");
+          }
+          priorAdviceSnapRef.current = null;
+          setLastShotFeedbackPrompt(null);
+          setLastShotAwaitingSpeakOrMic(false);
+          await fetchCaddieAdviceInternal(ctrl.signal);
+        } catch (e) {
+          if (!aborted && !((e instanceof DOMException || e instanceof Error) && e.name === "AbortError"))
+            setCaddieErr(e instanceof Error ? e.message : String(e));
+          if (!promptReady) {
+            setLastShotAwaitingSpeakOrMic(false);
+            setLastShotFeedbackPrompt(null);
+          }
+        } finally {
+          setListeningLastShot(false);
+        }
+      } else if (!gate) {
+        await fetchCaddieAdviceInternal(ctrl.signal);
+      }
+    })();
+
+    return () => {
+      aborted = true;
+      ctrl.abort();
+    };
+  }, [
+    showCaddieAdvice,
+    caddieFlowKey,
+    courseId,
+    holeNum,
+    effectivePos,
+    fetchCaddieAdviceInternal,
+    liveGps,
+    roundMode,
+    speakAdviceAutomatically,
+  ]);
 
   const talkWithCaddie = () => {
+    setCaddieFlowKey((k) => k + 1);
     setCaddieErr(null);
     setCaddieBriefing(null);
     setCaddieSummary(null);
+    setVoiceFollowupAnswer(null);
+    setLastShotFeedbackPrompt(null);
+    setLastShotAwaitingSpeakOrMic(false);
+    setListeningLastShot(false);
     setTtsErr(null);
+    skipFeedbackGateOnceRef.current = false;
     setShowCaddieAdvice(true);
   };
 
@@ -1165,15 +1412,9 @@ export function CaddieApp() {
         if (!pm) return;
         const startNow: LL = pm;
 
-        const mets = hole?.metrics as { plays_like_yd?: number } | undefined;
-        const pinPlays =
-          mets?.plays_like_yd != null && Number.isFinite(Number(mets.plays_like_yd))
-            ? Number(mets.plays_like_yd)
-            : haversineYards(startNow, end);
-        // Keep bend when user dragged or caddie agent placed it; only reset on hole/course change (see effect).
-        const bendForLine: LL = pinPlays <= APPROACH_PIN_BEND_MAX_YD && !approachBendUserDraggedRef.current ? end : bend;
+        // Never auto-move the white target or shot line—advice uses wherever the player aimed (drag or initial hole target).
+        const bendForLine: LL = bend;
         bendMapRef.current = bendForLine;
-        const autoApproachHideYardChips = pinPlays <= APPROACH_PIN_BEND_MAX_YD && !approachBendUserDraggedRef.current;
 
         function nudgeOffLine(p1: LL, p2: LL, mid: LL): LL {
           try {
@@ -1224,22 +1465,13 @@ export function CaddieApp() {
           yardPopOpen,
         );
 
-        if (autoApproachHideYardChips) {
-          const pop = yardPopOpen.current;
-          if (pop && yardEl2.contains(pop)) {
-            pop.style.display = "none";
-            yardPopOpen.current = null;
-          }
-          yardEl2.style.display = "none";
-        } else {
-          yardEl2.style.display = "";
-          yardMarker2.setLngLat([mid2N.lon, mid2N.lat]);
-          fillMapYardChip(
-            yardEl2,
-            { playsYd: d2, straightYd: d2, elevChangeYd: null, windAdjustYd: null, weatherOk: wxOkChip, pending: true },
-            yardPopOpen,
-          );
-        }
+        yardEl2.style.display = "";
+        yardMarker2.setLngLat([mid2N.lon, mid2N.lat]);
+        fillMapYardChip(
+          yardEl2,
+          { playsYd: d2, straightYd: d2, elevChangeYd: null, windAdjustYd: null, weatherOk: wxOkChip, pending: true },
+          yardPopOpen,
+        );
 
         schedulePathLegs();
       };
@@ -1533,7 +1765,16 @@ export function CaddieApp() {
             if (e.target === e.currentTarget) setShowCaddieAdvice(false);
           }}
         >
-          <div className="modalCard" style={{ maxHeight: "78dvh", width: "min(100%, 400px)" }}>
+          <div
+            className="modalCard"
+            style={{
+              maxHeight: "78dvh",
+              width: "min(100%, 400px)",
+              display: "flex",
+              flexDirection: "column",
+              minHeight: 0,
+            }}
+          >
             <div className="modalHeader">
               <div>
                 <div className="modalTitle">Talk with caddie</div>
@@ -1545,16 +1786,94 @@ export function CaddieApp() {
                 Close
               </button>
             </div>
-            <div style={{ padding: 12, display: "flex", flexDirection: "column", gap: 10, overflow: "auto" }}>
-              {caddieLoading ? (
-                <div style={{ fontSize: 14, padding: "12px 0" }}>Getting advice…</div>
+            <div
+              style={{
+                flex: 1,
+                minHeight: 0,
+                padding: 12,
+                display: "flex",
+                flexDirection: "column",
+                gap: 10,
+                overflow: "auto",
+              }}
+            >
+              {lastShotAwaitingSpeakOrMic && !lastShotFeedbackPrompt && !listeningLastShot ? (
+                <div style={{ fontSize: 14, opacity: 0.75 }} aria-live="polite">
+                  Preparing a quick check-in on your last shot…
+                </div>
               ) : null}
-              {!caddieLoading && caddieErr ? (
+              {lastShotFeedbackPrompt ? (
+                <section
+                  style={{
+                    padding: "10px 12px",
+                    borderRadius: 10,
+                    background: "rgba(22, 163, 74, 0.08)",
+                    border: "1px solid rgba(22,163,74,0.22)",
+                    fontSize: 14,
+                    lineHeight: 1.45,
+                  }}
+                  aria-label="Last shot check-in"
+                >
+                  <div style={{ fontWeight: 800, fontSize: 12, letterSpacing: "0.06em", marginBottom: 6 }}>
+                    LAST SHOT
+                  </div>
+                  <div style={{ whiteSpace: "pre-wrap" }}>{lastShotFeedbackPrompt}</div>
+                  {listeningLastShot ? (
+                    <div className="metricSub" style={{ marginTop: 8 }} aria-live="polite">
+                      Listening — speak now…
+                    </div>
+                  ) : null}
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginTop: 10 }}>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={listeningLastShot || caddieLoading}
+                      onClick={() => void retryLastShotListen()}
+                    >
+                      Retry mic
+                    </button>
+                    <button
+                      type="button"
+                      className="btn"
+                      disabled={listeningLastShot || caddieLoading}
+                      onClick={() => void skipLastShotFeedback()}
+                    >
+                      Skip logging
+                    </button>
+                  </div>
+                </section>
+              ) : null}
+              {caddieLoading && !(lastShotAwaitingSpeakOrMic && lastShotFeedbackPrompt) ? (
+                <div style={{ fontSize: 14, padding: "8px 0" }} aria-live="polite">
+                  Getting advice…
+                </div>
+              ) : null}
+              {caddieErr ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
                   <div style={{ fontSize: 13, color: "#b91c1c", whiteSpace: "pre-wrap" }}>{caddieErr}</div>
-                  <button type="button" className="btn" onClick={() => void fetchCaddieAdvice()}>
-                    Try again
-                  </button>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                    {lastShotFeedbackPrompt ? (
+                      <>
+                        <button type="button" className="btn" onClick={() => void retryLastShotListen()}>
+                          Retry mic
+                        </button>
+                        <button type="button" className="btn" onClick={() => void skipLastShotFeedback()}>
+                          Skip to advice
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        className="btn"
+                        onClick={() => {
+                          if (lastShotAwaitingSpeakOrMic) setCaddieFlowKey((k) => k + 1);
+                          else void fetchCaddieAdvice();
+                        }}
+                      >
+                        Try again
+                      </button>
+                    )}
+                  </div>
                 </div>
               ) : null}
               {caddieSummary || caddieBriefing ? (
@@ -1587,6 +1906,24 @@ export function CaddieApp() {
                       </div>
                     </details>
                   ) : null}
+                  {voiceFollowupAnswer ? (
+                    <div
+                      style={{
+                        marginTop: 4,
+                        padding: "10px 12px",
+                        borderRadius: 8,
+                        background: "rgba(11,18,32,0.05)",
+                        fontSize: 14,
+                        lineHeight: 1.45,
+                        whiteSpace: "pre-wrap",
+                      }}
+                    >
+                      <div style={{ fontWeight: 800, fontSize: 11, letterSpacing: "0.08em", marginBottom: 6 }}>
+                        YOUR QUESTION (VOICE)
+                      </div>
+                      {voiceFollowupAnswer}
+                    </div>
+                  ) : null}
                   {ttsLoading && (caddieSummary ?? "").trim() ? (
                     <div className="metricSub" style={{ paddingTop: 2 }} aria-live="polite">
                       Playing caddie voice…
@@ -1596,6 +1933,30 @@ export function CaddieApp() {
                 </div>
               ) : null}
             </div>
+            {caddieSummary && !lastShotFeedbackPrompt && !lastShotAwaitingSpeakOrMic ? (
+              <div
+                style={{
+                  flexShrink: 0,
+                  borderTop: "1px solid rgba(11,18,32,0.1)",
+                  padding: 12,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 8,
+                }}
+              >
+                <button
+                  type="button"
+                  className="btn btnPrimary"
+                  disabled={voiceFollowupBusy || caddieLoading || listeningLastShot}
+                  onClick={() => void askCaddieVoiceFollowup()}
+                >
+                  {voiceFollowupBusy ? "Listening / thinking…" : "Ask anything (voice)"}
+                </button>
+                <div style={{ fontSize: 12, color: "rgba(11,18,32,0.55)", lineHeight: 1.35 }}>
+                  Tap, then ask your question out loud — the caddie answers with voice automatically.
+                </div>
+              </div>
+            ) : null}
           </div>
         </div>
       ) : null}
