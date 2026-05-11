@@ -17,6 +17,7 @@ type Round = {
   updated_at: string;
   notes?: string | null;
   scorecard_json?: string | null;
+  round_mode?: "live" | "sim" | null;
 };
 
 type ShotRow = {
@@ -199,7 +200,13 @@ export default function RoundDetailPage() {
         ) : null}
       </p>
       <p style={{ opacity: 0.85, marginTop: 4 }}>
-        <Link href={`/caddie?round=${round.id}&hole=${round.current_hole}`}>Open map / caddie</Link>
+        <Link
+          href={`/caddie?round=${round.id}&hole=${round.current_hole}${
+            round.round_mode === "live" || round.round_mode === "sim" ? `&mode=${round.round_mode}` : ""
+          }`}
+        >
+          Open map / caddie
+        </Link>
         {" · "}
         <Link href={`/rounds/shot-history?round=${round.id}`}>Shot history for this round</Link>
       </p>

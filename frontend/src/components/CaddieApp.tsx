@@ -327,13 +327,15 @@ type CaddieAppProps = {
   resumeRoundId?: number | null;
   /** Optional 1–18 from `?hole=` so the UI opens on that hole before/while the round fetch completes. */
   resumeHoleHint?: number | null;
+  /** Optional `?mode=live|sim` plus server `round_mode` to skip the mode picker when continuing a round. */
+  resumeModeHint?: RoundMode | null;
 };
 
 function clampHoleNum(h: number): number {
   return Math.min(18, Math.max(1, Math.round(h)));
 }
 
-export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: CaddieAppProps) {
+export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeModeHint = null }: CaddieAppProps) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [courseId, setCourseId] = useState<string>("stevens_golf_course");
   const [holeNum, setHoleNum] = useState<number>(() =>
@@ -422,6 +424,7 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: Caddi
       setLinkedRoundId(null);
       setResumeRoundErr(null);
       setResumeRoundLoading(false);
+      setRoundMode(null);
       return;
     }
     priorResumeRoundIdRef.current = resumeRoundId;
@@ -436,6 +439,7 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: Caddi
           current_hole: number;
           status: string;
           scorecard_json?: string | null;
+          round_mode?: string | null;
         };
         if (cancelled) return;
         if (r.status !== "active") {
@@ -451,6 +455,11 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: Caddi
         const hintH = resumeHoleHint != null ? clampHoleNum(resumeHoleHint) : 0;
         setHoleNum(clampHoleNum(Math.max(apiH, scoreMax, hintH)));
         setLinkedRoundId(r.id);
+        const rm = (r.round_mode || "").toLowerCase();
+        const fromApi = rm === "live" || rm === "sim" ? (rm as RoundMode) : null;
+        const fromHint = resumeModeHint === "live" || resumeModeHint === "sim" ? resumeModeHint : null;
+        const pickMode = fromApi ?? fromHint;
+        if (pickMode) setRoundMode(pickMode);
       } catch (e) {
         if (!cancelled) {
           setResumeRoundErr(e instanceof Error ? e.message : "Could not load that round.");
@@ -463,17 +472,18 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: Caddi
     return () => {
       cancelled = true;
     };
-  }, [resumeRoundId, resumeHoleHint]);
+  }, [resumeRoundId, resumeHoleHint, resumeModeHint]);
 
   useEffect(() => {
     if (!linkedRoundId || roundMode == null) return;
     const id = linkedRoundId;
     const h = holeNum;
     const scoreJson = JSON.stringify(scorecardPlayers);
+    const mode = roundMode;
     const t = window.setTimeout(() => {
       void apiFetch(`/api/rounds/${id}`, {
         method: "PUT",
-        body: JSON.stringify({ current_hole: h, scorecard_json: scoreJson }),
+        body: JSON.stringify({ current_hole: h, scorecard_json: scoreJson, round_mode: mode }),
       }).catch(() => {});
     }, 700);
     return () => window.clearTimeout(t);
@@ -1881,15 +1891,10 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: Caddi
             <p className="modePickerSub">Loading your round…</p>
           ) : linkedRoundId != null ? (
             <p className="modePickerSub">
-              Continuing round #{linkedRoundId} on {courseId.replace(/_/g, " ")} — hole {holeNum}. Pick Live or Sim; hole
-              and scorecard sync to Past rounds.
+              Continuing round #{linkedRoundId} on {courseId.replace(/_/g, " ")} — hole {holeNum}. Pick Live or Sim; hole and
+              scorecard updates save to this round.
             </p>
-          ) : (
-            <p className="modePickerSub">
-              Choose a mode to start. A server round is created for this course so your scorecard and logged shots stay with
-              that round.
-            </p>
-          )}
+          ) : null}
           {resumeRoundErr ? (
             <p className="modePickerSub" style={{ color: "#b91c1c", marginBottom: 12 }}>
               {resumeRoundErr}
@@ -1913,11 +1918,6 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: Caddi
               Simulated round
             </button>
           </div>
-          <p className="modePickerSub" style={{ marginTop: 16, fontSize: 13 }}>
-            <a href="/rounds" style={{ color: "inherit", fontWeight: 700 }}>
-              Past rounds
-            </a>
-          </p>
         </div>
       </div>
     );
@@ -1940,14 +1940,6 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: Caddi
             ) : null}
           </div>
           {roundMode === "live" && !liveGps ? <div className="metricSub">Acquiring GPS…</div> : null}
-          {linkedRoundId ? (
-            <div className="metricSub" style={{ marginTop: 4 }}>
-              <a href="/rounds" style={{ color: "inherit", fontWeight: 700 }}>
-                Round #{linkedRoundId}
-              </a>
-              {" · hole & scorecard sync to Past rounds"}
-            </div>
-          ) : null}
         </div>
         <div style={{ textAlign: "right" }}>
           <div className="metricLabel">Hit green %</div>

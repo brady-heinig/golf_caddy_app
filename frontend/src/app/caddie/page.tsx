@@ -14,7 +14,12 @@ function CaddieWithRoundQuery() {
   const hn = holeRaw != null ? Number.parseInt(holeRaw, 10) : NaN;
   const resumeHoleHint =
     resumeRoundId != null && Number.isFinite(hn) && hn >= 1 && hn <= 18 ? hn : null;
-  return <CaddieApp resumeRoundId={resumeRoundId} resumeHoleHint={resumeHoleHint} />;
+  const modeRaw = (sp.get("mode") || "").toLowerCase();
+  const resumeModeHint =
+    resumeRoundId != null && (modeRaw === "live" || modeRaw === "sim") ? (modeRaw as "live" | "sim") : null;
+  return (
+    <CaddieApp resumeRoundId={resumeRoundId} resumeHoleHint={resumeHoleHint} resumeModeHint={resumeModeHint} />
+  );
 }
 
 export default function CaddiePage() {

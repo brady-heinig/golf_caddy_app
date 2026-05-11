@@ -1,10 +1,9 @@
 "use client";
 
-import Link from "next/link";
+import type { CSSProperties } from "react";
 import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
-import { parseScorecardPlayers, primaryStrokeTotals } from "@/lib/scorecardRound";
 
 type Round = {
   id: number;
@@ -14,13 +13,22 @@ type Round = {
   started_at: string;
   updated_at: string;
   scorecard_json?: string | null;
+  round_mode?: "live" | "sim" | null;
 };
+
+function caddieContinueHref(r: Round): string {
+  const hole = Math.min(18, Math.max(1, Math.round(Number(r.current_hole)) || 1));
+  const base = `/caddie?round=${r.id}&hole=${hole}`;
+  if (r.round_mode === "live" || r.round_mode === "sim") return `${base}&mode=${r.round_mode}`;
+  return base;
+}
 
 export default function RoundsPage() {
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<Round[]>([]);
   const [finished, setFinished] = useState<Round[]>([]);
   const [loading, setLoading] = useState(true);
+  const [courseNames, setCourseNames] = useState<Record<string, string>>({});
 
   async function refresh() {
     setError(null);
@@ -41,14 +49,28 @@ export default function RoundsPage() {
     refresh();
   }, []);
 
-  async function finishRound(id: number) {
-    setError(null);
-    try {
-      await apiFetch(`/api/rounds/${id}/finish`, { method: "POST" });
-      await refresh();
-    } catch (e: any) {
-      setError(e?.message || "Failed to finish round");
-    }
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const list = (await apiFetch("/api/caddie/courses")) as { id: string; name: string }[];
+        if (cancelled || !Array.isArray(list)) return;
+        const m: Record<string, string> = {};
+        for (const c of list) {
+          if (c?.id && typeof c.name === "string") m[c.id] = c.name;
+        }
+        setCourseNames(m);
+      } catch {
+        /* keep course_id fallback */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  function courseLabel(courseId: string): string {
+    return courseNames[courseId] ?? courseId.replace(/_/g, " ");
   }
 
   async function deleteRound(id: number) {
@@ -61,6 +83,43 @@ export default function RoundsPage() {
     }
   }
 
+  const rowStyle: CSSProperties = {
+    display: "flex",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 10,
+    marginBottom: 14,
+    paddingBottom: 12,
+    borderBottom: "1px solid rgba(11,18,32,0.1)",
+  };
+
+  const btnStyle: CSSProperties = {
+    padding: "10px 16px",
+    borderRadius: 10,
+    border: "1px solid rgba(11,18,32,0.2)",
+    background: "#f4f6f8",
+    cursor: "pointer",
+    fontWeight: 700,
+    fontSize: 14,
+    textDecoration: "none",
+    color: "#0b1220",
+    display: "inline-block",
+  };
+
+  const primaryBtn: CSSProperties = {
+    ...btnStyle,
+    background: "#16a34a",
+    borderColor: "#15803d",
+    color: "#fff",
+  };
+
+  const delBtn: CSSProperties = {
+    ...btnStyle,
+    background: "#fff",
+    borderColor: "rgba(185,28,28,0.45)",
+    color: "#b91c1c",
+  };
+
   return (
     <main style={{ margin: 0 }}>
       <h1 style={{ marginTop: 0 }}>Rounds</h1>
@@ -70,64 +129,40 @@ export default function RoundsPage() {
 
       <h2>Active</h2>
       {active.length === 0 ? <p style={{ opacity: 0.8 }}>No active rounds.</p> : null}
-      <ul style={{ paddingLeft: 18 }}>
+      <div>
         {active.map((r) => (
-          <li key={r.id} style={{ marginBottom: 8 }}>
-            <Link href={`/caddie?round=${r.id}&hole=${r.current_hole}`} style={{ fontWeight: 800 }}>
-              Continue round #{r.id}
-            </Link>
-            <span style={{ opacity: 0.85 }}>
-              {" "}
-              — {r.course_id} — hole {r.current_hole}
-              {(() => {
-                const t = primaryStrokeTotals(parseScorecardPlayers(r.scorecard_json ?? null));
-                return t ? ` — ${t.strokes} st / ${t.holesPlayed} holes` : "";
-              })()}
-            </span>
-            {" · "}
-            <Link href={`/rounds/${r.id}`} style={{ fontSize: 14 }}>
-              Chat & details
-            </Link>
-            {" · "}
-            <Link href={`/rounds/shot-history?round=${r.id}`} style={{ fontSize: 14 }}>
-              Shots
-            </Link>
-            <button onClick={() => finishRound(r.id)} style={{ marginLeft: 10 }}>
-              Finish
-            </button>
-            <button onClick={() => deleteRound(r.id)} style={{ marginLeft: 8 }}>
-              Delete
-            </button>
-          </li>
+          <div key={r.id} style={rowStyle}>
+            <div style={{ flex: "1 1 220px", minWidth: 0, fontWeight: 600 }}>
+              Round #{r.id}: {courseLabel(r.course_id)} - Hole {r.current_hole}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <a href={caddieContinueHref(r)} style={primaryBtn}>
+                Continue
+              </a>
+              <button type="button" style={delBtn} onClick={() => void deleteRound(r.id)}>
+                Delete
+              </button>
+            </div>
+          </div>
         ))}
-      </ul>
+      </div>
 
-      <h2>Finished</h2>
+      <h2 style={{ marginTop: 28 }}>Finished</h2>
       {finished.length === 0 ? <p style={{ opacity: 0.8 }}>No finished rounds.</p> : null}
-      <ul style={{ paddingLeft: 18 }}>
+      <div>
         {finished.map((r) => (
-          <li key={r.id} style={{ marginBottom: 8 }}>
-            <Link href={`/rounds/${r.id}`}>Round #{r.id}</Link> — {r.course_id}
-            {(() => {
-              const t = primaryStrokeTotals(parseScorecardPlayers(r.scorecard_json ?? null));
-              return t ? (
-                <span style={{ opacity: 0.85 }}>
-                  {" "}
-                  — {t.strokes} st / {t.holesPlayed} holes
-                </span>
-              ) : null;
-            })()}
-            {" · "}
-            <Link href={`/rounds/shot-history?round=${r.id}`} style={{ fontSize: 14 }}>
-              Shots
-            </Link>
-            <button onClick={() => deleteRound(r.id)} style={{ marginLeft: 8 }}>
-              Delete
-            </button>
-          </li>
+          <div key={r.id} style={rowStyle}>
+            <div style={{ flex: "1 1 220px", minWidth: 0, fontWeight: 600 }}>
+              Round #{r.id}: {courseLabel(r.course_id)} - Hole {r.current_hole}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <button type="button" style={delBtn} onClick={() => void deleteRound(r.id)}>
+                Delete
+              </button>
+            </div>
+          </div>
         ))}
-      </ul>
+      </div>
     </main>
   );
 }
-

@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
+
 from pydantic import BaseModel, Field
 
 from .deps import get_conn, get_current_user
@@ -26,12 +27,14 @@ class RoundOut(BaseModel):
     updated_at: str
     notes: str | None = None
     scorecard_json: str | None = None
+    round_mode: Literal["live", "sim"] | None = None
 
 
 class RoundUpdateIn(BaseModel):
     current_hole: int | None = Field(default=None, ge=1, le=18)
     notes: str | None = Field(default=None, max_length=2000)
     scorecard_json: str | None = Field(default=None, max_length=200_000)
+    round_mode: Literal["live", "sim"] | None = None
 
 
 def _iso(v) -> str:
@@ -48,6 +51,17 @@ def _scorecard_from_row(row) -> str | None:
     return str(v) if v is not None else None
 
 
+def _round_mode_from_row(row) -> Literal["live", "sim"] | None:
+    try:
+        v = row["round_mode"]
+    except (KeyError, TypeError):
+        return None
+    if v is None:
+        return None
+    s = str(v).strip().lower()
+    return s if s in ("live", "sim") else None
+
+
 def _row_to_round(row) -> RoundOut:
     return RoundOut(
         id=int(row["id"]),
@@ -58,6 +72,7 @@ def _row_to_round(row) -> RoundOut:
         updated_at=_iso(row["updated_at"]),
         notes=row["notes"],
         scorecard_json=_scorecard_from_row(row),
+        round_mode=_round_mode_from_row(row),
     )
 
 
@@ -168,13 +183,16 @@ def update_round(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid scorecard_json: {e}",
             ) from e
+    new_rm = _round_mode_from_row(row)
+    if body.round_mode is not None:
+        new_rm = body.round_mode
     conn.execute(
         """
         UPDATE rounds
-        SET current_hole = %s, notes = %s, scorecard_json = %s, updated_at = now()
+        SET current_hole = %s, notes = %s, scorecard_json = %s, round_mode = %s, updated_at = now()
         WHERE id = %s AND user_id = %s
         """,
-        (current_hole, notes, new_sc, round_id, int(user["id"])),
+        (current_hole, notes, new_sc, new_rm, round_id, int(user["id"])),
     )
     conn.commit()
     updated = conn.execute(
