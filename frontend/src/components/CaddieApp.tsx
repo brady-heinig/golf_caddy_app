@@ -4,7 +4,7 @@
 // inside the Vercel-ready Next.js app.
 
 import { apiFetch } from "@/lib/api";
-import { parseScorecardPlayers, type ScorecardPlayerRow } from "@/lib/scorecardRound";
+import { maxHoleWithNumericScore, parseScorecardPlayers, type ScorecardPlayerRow } from "@/lib/scorecardRound";
 import { listenOnce } from "@/lib/speechListen";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map, Marker } from "maplibre-gl";
@@ -325,12 +325,20 @@ function DistanceHeaderTip({
 type CaddieAppProps = {
   /** When set (e.g. `/caddie?round=12`), load that active round’s course + hole then continue in Live or Sim. */
   resumeRoundId?: number | null;
+  /** Optional 1–18 from `?hole=` so the UI opens on that hole before/while the round fetch completes. */
+  resumeHoleHint?: number | null;
 };
 
-export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
+function clampHoleNum(h: number): number {
+  return Math.min(18, Math.max(1, Math.round(h)));
+}
+
+export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null }: CaddieAppProps) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [courseId, setCourseId] = useState<string>("stevens_golf_course");
-  const [holeNum, setHoleNum] = useState<number>(1);
+  const [holeNum, setHoleNum] = useState<number>(() =>
+    resumeRoundId != null && resumeHoleHint != null ? clampHoleNum(resumeHoleHint) : 1,
+  );
   const [hole, setHole] = useState<HoleResp | null>(null);
   const [course, setCourse] = useState<CourseDetail | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -400,6 +408,8 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
   } | null>(null);
   const pathLegsDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathLegsRequestIdRef = useRef(0);
+  /** Tracks last loaded `?round=` so we can reset hole when leaving resume mode without clobbering normal /caddie play. */
+  const priorResumeRoundIdRef = useRef<number | null>(null);
 
   useEffect(() => {
     approachBendUserDraggedRef.current = false;
@@ -407,11 +417,14 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
 
   useEffect(() => {
     if (!resumeRoundId) {
+      if (priorResumeRoundIdRef.current != null) setHoleNum(1);
+      priorResumeRoundIdRef.current = null;
       setLinkedRoundId(null);
       setResumeRoundErr(null);
       setResumeRoundLoading(false);
       return;
     }
+    priorResumeRoundIdRef.current = resumeRoundId;
     let cancelled = false;
     setResumeRoundLoading(true);
     setResumeRoundErr(null);
@@ -431,11 +444,13 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
           return;
         }
         setCourseId(r.course_id);
-        const h = Number(r.current_hole);
-        setHoleNum(Number.isFinite(h) ? Math.min(18, Math.max(1, Math.round(h))) : 1);
-        setLinkedRoundId(r.id);
         const restored = parseScorecardPlayers(r.scorecard_json ?? null);
         if (restored) setScorecardPlayers(restored);
+        const apiH = Number.isFinite(Number(r.current_hole)) ? clampHoleNum(Number(r.current_hole)) : 1;
+        const scoreMax = restored ? maxHoleWithNumericScore(restored) : 0;
+        const hintH = resumeHoleHint != null ? clampHoleNum(resumeHoleHint) : 0;
+        setHoleNum(clampHoleNum(Math.max(apiH, scoreMax, hintH)));
+        setLinkedRoundId(r.id);
       } catch (e) {
         if (!cancelled) {
           setResumeRoundErr(e instanceof Error ? e.message : "Could not load that round.");
@@ -448,7 +463,7 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
     return () => {
       cancelled = true;
     };
-  }, [resumeRoundId]);
+  }, [resumeRoundId, resumeHoleHint]);
 
   useEffect(() => {
     if (!linkedRoundId || roundMode == null) return;
@@ -760,12 +775,13 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
   const resolvedActivePlayerId = activeCardPlayerId ?? scorecardPlayers[0]?.id ?? "";
 
   const activateHoleCell = (playerId: string, hn: number) => {
-    setActiveCardPlayerId(playerId);
     setScoreEditCell({ playerId, hole: hn });
+    setActiveCardPlayerId(playerId);
     setScorecardPlayers((prev) =>
       prev.map((pl) => {
         if (pl.id !== playerId) return pl;
-        if (pl.scores[hn - 1] != null) return pl;
+        const cur = pl.scores[hn - 1];
+        if (typeof cur === "number") return pl;
         const p = parForHole(hn);
         const scores = pl.scores.slice();
         scores[hn - 1] = p;
@@ -782,6 +798,18 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
   useEffect(() => {
     if (!showScore) setScoreEditCell(null);
   }, [showScore]);
+
+  useEffect(() => {
+    if (!scoreEditCell) return;
+    const clear = (e: PointerEvent) => {
+      const el = e.target as HTMLElement | null;
+      if (!el) return;
+      if (el.closest("[data-score-active]")) return;
+      setScoreEditCell(null);
+    };
+    document.addEventListener("pointerdown", clear, true);
+    return () => document.removeEventListener("pointerdown", clear, true);
+  }, [scoreEditCell]);
 
   useEffect(() => {
     if (showCaddieAdvice || showVoiceAsk) return;
@@ -2411,14 +2439,18 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
                           const s = pl.scores[hn - 1];
                           const isEditing =
                             scoreEditCell != null && scoreEditCell.playerId === pl.id && scoreEditCell.hole === hn;
-                          const showAdjuster = isEditing && typeof s === "number";
+                          const valEdit = typeof s === "number" ? s : parForHole(hn);
                           return (
                             <div
                               key={hn}
                               data-score-cell
+                              data-score-active={isEditing ? "" : undefined}
                               tabIndex={0}
                               className={`scoreCell scoreCellInGrid ${isEditing ? "active" : ""}`}
-                              onClick={() => activateHoleCell(pl.id, hn)}
+                              onClick={(e) => {
+                                if ((e.target as HTMLElement).closest("button")) return;
+                                activateHoleCell(pl.id, hn);
+                              }}
                               onKeyDown={(e) => {
                                 if (e.key === "Enter" || e.key === " ") {
                                   e.preventDefault();
@@ -2427,12 +2459,14 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
                               }}
                               aria-label={
                                 typeof s === "number"
-                                  ? `Hole ${hn}, score ${s}. Press Enter to edit.`
-                                  : `Hole ${hn}, no score. Press Enter to add.`
+                                  ? `Hole ${hn}, score ${s}. Press Enter to edit with plus and minus.`
+                                  : `Hole ${hn}, no score. Press Enter to set to par and edit.`
                               }
                             >
-                              {!showAdjuster ? (
-                                <div className="scoreVal scoreValSolo">{typeof s === "number" ? s : ""}</div>
+                              {!isEditing ? (
+                                <div className="scoreVal scoreValSolo">
+                                  {typeof s === "number" ? s : "—"}
+                                </div>
                               ) : (
                                 <div
                                   className="scoreAdjuster"
@@ -2443,19 +2477,19 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
                                     type="button"
                                     className="scoreAdjBtn"
                                     aria-label="Subtract one stroke"
-                                    disabled={typeof s === "number" && s <= SCORE_STRIP_MIN}
+                                    disabled={valEdit <= SCORE_STRIP_MIN}
                                     onClick={() => adjustHoleScore(pl.id, hn, -1)}
                                   >
                                     −
                                   </button>
                                   <div className="scoreAdjVal" aria-live="polite">
-                                    {s}
+                                    {valEdit}
                                   </div>
                                   <button
                                     type="button"
                                     className="scoreAdjBtn"
                                     aria-label="Add one stroke"
-                                    disabled={typeof s === "number" && s >= SCORE_STRIP_MAX}
+                                    disabled={valEdit >= SCORE_STRIP_MAX}
                                     onClick={() => adjustHoleScore(pl.id, hn, 1)}
                                   >
                                     +
@@ -2474,7 +2508,8 @@ export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
                 + Add player
               </button>
               <div className="muted" style={{ fontSize: 12 }}>
-                Score is stored locally in your browser for this prototype screen.
+                Tap a hole to fill with par and use − / +. Tap outside the cell to keep the score. Linked rounds sync to the
+                server.
               </div>
             </div>
           </div>

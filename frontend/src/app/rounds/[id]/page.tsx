@@ -199,7 +199,7 @@ export default function RoundDetailPage() {
         ) : null}
       </p>
       <p style={{ opacity: 0.85, marginTop: 4 }}>
-        <Link href={`/caddie?round=${round.id}`}>Open map / caddie</Link>
+        <Link href={`/caddie?round=${round.id}&hole=${round.current_hole}`}>Open map / caddie</Link>
         {" · "}
         <Link href={`/rounds/shot-history?round=${round.id}`}>Shot history for this round</Link>
       </p>

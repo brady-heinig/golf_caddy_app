@@ -10,7 +10,11 @@ function CaddieWithRoundQuery() {
   const raw = sp.get("round");
   const n = raw != null ? Number.parseInt(raw, 10) : NaN;
   const resumeRoundId = Number.isFinite(n) && n > 0 ? n : null;
-  return <CaddieApp resumeRoundId={resumeRoundId} />;
+  const holeRaw = sp.get("hole");
+  const hn = holeRaw != null ? Number.parseInt(holeRaw, 10) : NaN;
+  const resumeHoleHint =
+    resumeRoundId != null && Number.isFinite(hn) && hn >= 1 && hn <= 18 ? hn : null;
+  return <CaddieApp resumeRoundId={resumeRoundId} resumeHoleHint={resumeHoleHint} />;
 }
 
 export default function CaddiePage() {

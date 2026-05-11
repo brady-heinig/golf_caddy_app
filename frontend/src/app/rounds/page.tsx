@@ -106,7 +106,7 @@ export default function RoundsPage() {
       <ul style={{ paddingLeft: 18 }}>
         {active.map((r) => (
           <li key={r.id} style={{ marginBottom: 8 }}>
-            <Link href={`/caddie?round=${r.id}`} style={{ fontWeight: 800 }}>
+            <Link href={`/caddie?round=${r.id}&hole=${r.current_hole}`} style={{ fontWeight: 800 }}>
               Continue round #{r.id}
             </Link>
             <span style={{ opacity: 0.85 }}>

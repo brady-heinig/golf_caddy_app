@@ -35,6 +35,18 @@ export function parseScorecardPlayers(raw: string | null | undefined): Scorecard
   }
 }
 
+/** Highest hole index (1–18) with a numeric score for any player; 0 if none. */
+export function maxHoleWithNumericScore(players: ScorecardPlayerRow[] | null): number {
+  if (!players?.length) return 0;
+  let m = 0;
+  for (const pl of players) {
+    for (let i = 0; i < 18; i++) {
+      if (typeof pl.scores[i] === "number") m = Math.max(m, i + 1);
+    }
+  }
+  return m;
+}
+
 export function primaryStrokeTotals(players: ScorecardPlayerRow[] | null): { strokes: number; holesPlayed: number } | null {
   if (!players?.length) return null;
   let strokes = 0;
