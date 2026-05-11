@@ -368,8 +368,11 @@ export function CaddieApp() {
   const voiceScrollAnchorRef = useRef<HTMLDivElement | null>(null);
   const [ttsLoading, setTtsLoading] = useState(false);
   const [ttsErr, setTtsErr] = useState<string | null>(null);
+  /** Mobile Safari/Chrome block audio unless play/speech runs from a fresh tap (autoplay after await fails). */
+  const [ttsNeedsUserTap, setTtsNeedsUserTap] = useState(false);
   const ttsAudioRef = useRef<HTMLAudioElement | null>(null);
   const ttsObjectUrlRef = useRef<string | null>(null);
+  const ttsTapTextRef = useRef<string>("");
   const [scoreEditCell, setScoreEditCell] = useState<{ playerId: string; hole: number } | null>(null);
   const [activeCardPlayerId, setActiveCardPlayerId] = useState<string | null>(null);
   const [wxOverride, setWxOverride] = useState<any | null>(null);
@@ -697,6 +700,7 @@ export function CaddieApp() {
       ttsObjectUrlRef.current = null;
     }
     setTtsErr(null);
+    setTtsNeedsUserTap(false);
     if (typeof window !== "undefined" && window.speechSynthesis) {
       window.speechSynthesis.cancel();
     }
@@ -723,7 +727,33 @@ export function CaddieApp() {
     window.speechSynthesis.speak(u);
   }
 
-  /** After advice returns: ElevenLabs when configured; browser speech synthesis on failure (or autoplay quirks). */
+  const playTtsFromUserGesture = useCallback(() => {
+    const text = ttsTapTextRef.current.trim();
+    const audio = ttsAudioRef.current;
+    if (audio?.src) {
+      void audio
+        .play()
+        .then(() => {
+          setTtsNeedsUserTap(false);
+          setTtsErr(null);
+        })
+        .catch(() => {
+          if (text) deviceSpeakAdvice(text);
+          setTtsNeedsUserTap(false);
+        });
+      return;
+    }
+    if (text) {
+      deviceSpeakAdvice(text);
+      setTtsNeedsUserTap(false);
+      setTtsErr(null);
+      return;
+    }
+    setTtsErr("Nothing to play.");
+    setTtsNeedsUserTap(false);
+  }, []);
+
+  /** After advice returns: ElevenLabs when configured; on phones, play() must often run from a tap (see ttsNeedsUserTap). */
   const speakAdviceAutomatically = useCallback(async (spokenFromApi: string) => {
     let text = (spokenFromApi ?? "").trim();
     if (/^(?:\*{0,2}\s*)?SUMMARY\s*:\s*\*{0,2}\s*/i.test(text)) {
@@ -732,6 +762,8 @@ export function CaddieApp() {
     if (!text) return;
 
     setTtsErr(null);
+    setTtsNeedsUserTap(false);
+    ttsTapTextRef.current = text;
     if (ttsAudioRef.current) {
       ttsAudioRef.current.pause();
       ttsAudioRef.current = null;
@@ -767,19 +799,28 @@ export function CaddieApp() {
       const url = URL.createObjectURL(blob);
       ttsObjectUrlRef.current = url;
       const audio = new Audio(url);
+      audio.playsInline = true;
+      audio.setAttribute("playsinline", "true");
+      audio.preload = "auto";
       ttsAudioRef.current = audio;
       audio.onended = () => {
         URL.revokeObjectURL(url);
         if (ttsObjectUrlRef.current === url) ttsObjectUrlRef.current = null;
         if (ttsAudioRef.current === audio) ttsAudioRef.current = null;
       };
-      await audio.play();
-    } catch {
       try {
-        deviceSpeakAdvice(text);
+        await audio.play();
       } catch {
-        setTtsErr("Voice unavailable (ElevenLabs and device speech failed).");
+        // Common on iOS/Android: play() rejected after async TTS fetch (no user-gesture chain).
+        setTtsNeedsUserTap(true);
       }
+    } catch {
+      ttsAudioRef.current = null;
+      if (ttsObjectUrlRef.current) {
+        URL.revokeObjectURL(ttsObjectUrlRef.current);
+        ttsObjectUrlRef.current = null;
+      }
+      setTtsNeedsUserTap(true);
     } finally {
       setTtsLoading(false);
     }
@@ -1119,6 +1160,7 @@ export function CaddieApp() {
     setLastShotAwaitingSpeakOrMic(false);
     setListeningLastShot(false);
     setTtsErr(null);
+    setTtsNeedsUserTap(false);
     skipFeedbackGateOnceRef.current = false;
     setShowCaddieAdvice(true);
   };
@@ -2025,6 +2067,16 @@ export function CaddieApp() {
                       Playing caddie voice…
                     </div>
                   ) : null}
+                  {ttsNeedsUserTap && (caddieSummary ?? "").trim() ? (
+                    <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingTop: 4 }}>
+                      <div className="metricSub" style={{ fontSize: 12, lineHeight: 1.35 }}>
+                        Sound on phones is blocked until you tap once (browser autoplay rule).
+                      </div>
+                      <button type="button" className="btn btnPrimary" onClick={playTtsFromUserGesture}>
+                        Tap to play caddie audio
+                      </button>
+                    </div>
+                  ) : null}
                   {ttsErr ? <div style={{ fontSize: 13, color: "#b91c1c" }}>{ttsErr}</div> : null}
                 </div>
               ) : null}
@@ -2119,6 +2171,16 @@ export function CaddieApp() {
               {ttsLoading ? (
                 <div className="metricSub" style={{ fontSize: 12 }} aria-live="polite">
                   Playing caddie voice…
+                </div>
+              ) : null}
+              {ttsNeedsUserTap ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div className="metricSub" style={{ fontSize: 11, lineHeight: 1.35 }}>
+                    Tap once to play — mobile browsers require a gesture for sound after loading.
+                  </div>
+                  <button type="button" className="btn btnPrimary" onClick={playTtsFromUserGesture}>
+                    Tap to play caddie audio
+                  </button>
                 </div>
               ) : null}
               {ttsErr ? <div style={{ fontSize: 12, color: "#b91c1c" }}>{ttsErr}</div> : null}
