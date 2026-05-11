@@ -183,6 +183,7 @@ def build_caddie_advice_context(
     bag: dict[str, Any],
     shot_shapes: dict[str, Any] | None,
     lie_detect_meta: dict[str, Any] | None = None,
+    map_target_plays_like_yds: float | None = None,
 ) -> str:
     intel = gather_shot_intel(
         hole=hole,
@@ -198,6 +199,7 @@ def build_caddie_advice_context(
         shot_shapes=shot_shapes,
         lie_detect_detail=lie_detect_meta,
         handicap=handicap,
+        map_target_plays_like_yds=map_target_plays_like_yds,
     )
     hz_osm = hazards_near_landing(features, landing_lat, landing_lon)
     hz_static = hole.get("hazards") or []

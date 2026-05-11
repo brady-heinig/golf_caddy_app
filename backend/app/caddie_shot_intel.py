@@ -446,6 +446,7 @@ def gather_shot_intel(
     shot_shapes: dict[str, Any] | None,
     lie_detect_detail: dict[str, Any] | None = None,
     handicap: float | None = None,
+    map_target_plays_like_yds: float | None = None,
 ) -> dict[str, Any]:
     tee = hole["tee"]
     gc = hole["green_center"]
@@ -518,7 +519,15 @@ def gather_shot_intel(
     )
     positional_play = meaningfully_short_landing
 
-    if positional_play:
+    use_map_target_for_club = (
+        map_target_plays_like_yds is not None
+        and float(map_target_plays_like_yds) >= 1.0
+        and str(landing_meta.get("how") or "") == "map_bend"
+    )
+    if use_map_target_for_club:
+        club_distance_target = float(map_target_plays_like_yds)
+        club_basis = "adjusted_plays_like_to_mapped_white_target"
+    elif positional_play:
         club_distance_target = float(carry_planned) * ratio_plays
         club_basis = "adjusted_carry_to_intended_landing"
     else:
@@ -526,7 +535,13 @@ def gather_shot_intel(
         club_basis = "adjusted_plays_like_to_pin"
 
     positional_note: str | None = None
-    if positional_play and carry_planned is not None:
+    if use_map_target_for_club:
+        positional_note = (
+            f"Mapped white aim point: pick the bag club for **~{int(round(club_distance_target))} yd** "
+            f"plays-like along player→white (wind/elevation on that segment), not "
+            f"**~{int(round(plays_like))} yd** plays-like to the pin."
+        )
+    elif positional_play and carry_planned is not None:
         pn_parts = [
             f"Landing/target ~{int(round(float(carry_planned)))} yd carry vs ~{int(round(plays_like))} yd plays-like "
             f"to pin — recommend clubs that fit the **fairway target**, not driver-at-green "
@@ -644,6 +659,8 @@ def gather_shot_intel(
         "severe_hazard_on_green_line": green_risk,
         "club_for_adjusted_plays_like": current_club_pick,
         "selection_notes": (
+            "If club_distance_basis is adjusted_plays_like_to_mapped_white_target, the bag club must match that "
+            "(leg-1) plays-like yards to the mapped white marker, not hole-out distance. "
             "If positional_play_to_landing is true (or club_distance_basis is adjusted_carry_to_intended_landing), "
             "the stroke is to the fairway / white target carry — typically irons or fairway metals, **not** driver at "
             "the pin, even when plays-like yardage to the green would fit driver (trees, routing, etc.). "

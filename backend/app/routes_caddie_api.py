@@ -265,11 +265,27 @@ def _resolve_voice_grounding(
     landing_h = _landing_hint_human(lmeta if isinstance(lmeta, dict) else {})
     par_hint = hole_full.get("par")
     par_out = int(par_hint) if isinstance(par_hint, (int, float)) else None
+    club_ctx_yd = plays_like
+    if bend_lat is not None and bend_lon is not None:
+        try:
+            plp = get_plays_like_path(
+                course_id=course_id,
+                hole_number=hole_number,
+                player_lat=float(player_lat),
+                player_lon=float(player_lon),
+                bend_lat=float(bend_lat),
+                bend_lon=float(bend_lon),
+            )
+            leg1 = plp.get("leg1_plays_like_yd")
+            if leg1 is not None and float(leg1) >= 1.0:
+                club_ctx_yd = float(leg1)
+        except Exception:
+            pass
     return _VoiceGrounding(
         course_name=crs_nm or course.get("name"),
         hole_number=int(hole_number),
         par=par_out,
-        plays_like_yds=plays_like,
+        plays_like_yds=club_ctx_yd,
         lie_label=str(lie_auto),
         landing_hint=landing_h,
     )
@@ -516,7 +532,25 @@ def caddie_advice(
     course_nm = (payload.get("course") or {}).get("name")
 
     plays_like = float(metrics.get("plays_like_yd") or 0.0)
-    club_pick = pick_club_for_plays_like_yards(bag, plays_like)
+    map_target_plays_like_yds: float | None = None
+    if body.bend_lat is not None and body.bend_lon is not None:
+        try:
+            plp = get_plays_like_path(
+                course_id=body.course_id,
+                hole_number=body.hole_number,
+                player_lat=float(body.player_lat),
+                player_lon=float(body.player_lon),
+                bend_lat=float(body.bend_lat),
+                bend_lon=float(body.bend_lon),
+            )
+            leg1 = plp.get("leg1_plays_like_yd")
+            if leg1 is not None and float(leg1) >= 1.0:
+                map_target_plays_like_yds = float(leg1)
+        except Exception:
+            map_target_plays_like_yds = None
+
+    club_context_yd = map_target_plays_like_yds if map_target_plays_like_yds is not None else plays_like
+    club_pick = pick_club_for_plays_like_yards(bag, club_context_yd)
     eff_shape = shot_shape_for_club(str(club_pick["club"]), shot_shapes_norm)
 
     ctx = build_caddie_advice_context(
@@ -537,6 +571,7 @@ def caddie_advice(
         bag=bag,
         shot_shapes=shot_shapes_norm,
         lie_detect_meta=lie_meta,
+        map_target_plays_like_yds=map_target_plays_like_yds,
     )
 
     user_line = (body.message or "").strip()
@@ -571,7 +606,7 @@ def caddie_advice(
         summary=summary_plain,
         assistant=assistant,
         recommended_club=str(club_pick.get("club") or "Unknown"),
-        plays_like_context_yd=plays_like,
+        plays_like_context_yd=float(club_context_yd),
     )
 
 
