@@ -799,7 +799,6 @@ export function CaddieApp() {
       const url = URL.createObjectURL(blob);
       ttsObjectUrlRef.current = url;
       const audio = new Audio(url);
-      audio.playsInline = true;
       audio.setAttribute("playsinline", "true");
       audio.preload = "auto";
       ttsAudioRef.current = audio;
