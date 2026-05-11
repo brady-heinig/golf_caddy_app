@@ -14,12 +14,68 @@ type BrowserSpeechRecognition = {
 
 type RecCtor = new () => BrowserSpeechRecognition;
 
+const SPEECH_ERR: Record<string, string> = {
+  "no-speech": "No speech detected — try again or speak a bit louder.",
+  "not-allowed": "Microphone blocked — allow microphone for this site in the browser address bar (site settings), then try again.",
+  aborted: "Recording stopped.",
+  network: "Speech recognition could not reach the network service. Check your connection and try again.",
+  "audio-capture": "No microphone was found or it could not be opened.",
+  "service-not-allowed":
+    "Chrome blocked the speech service (often fixed by allowing the mic, using HTTPS, or disabling conflicting extensions). Try again after allowing microphone access.",
+  "bad-grammar": "Speech recognition configuration error — try again.",
+  "language-not-supported": "This language is not supported for speech recognition.",
+};
+
+function speechErrorMessage(ev: { error: string; message?: string }): string {
+  const code = ev.error || "";
+  const fromCode = SPEECH_ERR[code];
+  if (fromCode) return fromCode;
+  const raw = (ev.message || "").trim();
+  const lower = raw.toLowerCase();
+  if (lower.includes("permission check") || lower.includes("permission denied")) {
+    return (
+      "Speech recognition could not verify microphone permission. " +
+      "Use HTTPS (or localhost), click the lock icon → Site settings → Microphone → Allow, then try again. " +
+      "If it still fails, allow the mic once via any voice button, or try a normal (non-guest) Chrome window."
+    );
+  }
+  return raw || `Speech error (${code || "unknown"})`;
+}
+
+/** Prime mic permission before Web Speech API — reduces Chrome “permission check has failed” failures. */
+async function ensureMicrophonePermission(): Promise<void> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) return;
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    stream.getTracks().forEach((t) => t.stop());
+  } catch (e: unknown) {
+    const name = e instanceof DOMException ? e.name : "";
+    if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+      throw new Error(
+        "Microphone access was denied. In Chrome: click the lock or tune icon in the address bar → Site settings → Microphone → Allow, then try again.",
+      );
+    }
+    if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+      throw new Error("No microphone was found on this device.");
+    }
+    if (name === "NotReadableError" || name === "TrackStartError") {
+      throw new Error("The microphone is in use or unavailable. Close other apps using the mic and try again.");
+    }
+    throw new Error(e instanceof Error ? e.message : "Could not open the microphone.");
+  }
+}
+
 export async function listenOnce(opts?: {
   lang?: string;
   signal?: AbortSignal;
 }): Promise<string> {
   if (typeof window === "undefined") {
     throw new Error("Speech recognition is only available in the browser.");
+  }
+  if (!window.isSecureContext) {
+    throw new Error(
+      "Speech recognition only works on a secure origin. Use HTTPS in production, or http://localhost for local development (not a raw LAN IP over HTTP).",
+    );
   }
   const w = window as unknown as {
     SpeechRecognition?: RecCtor;
@@ -31,6 +87,8 @@ export async function listenOnce(opts?: {
   }
 
   const lang = opts?.lang ?? "en-US";
+
+  await ensureMicrophonePermission();
 
   return new Promise((resolve, reject) => {
     const recognition = new SpeechRec();
@@ -61,16 +119,7 @@ export async function listenOnce(opts?: {
     };
 
     recognition.onerror = (ev) => {
-      const msg =
-        ev.message ||
-        (
-          ({
-            no_speech: "No speech detected — try again or speak a bit louder.",
-            not_allowed: "Microphone blocked — enable permissions in browser settings.",
-            aborted: "Recording stopped.",
-          }) as Record<string, string>
-        )[ev.error] ||
-        `Speech error (${ev.error})`;
+      const msg = speechErrorMessage(ev);
       settle(() => reject(new Error(msg)));
     };
 
