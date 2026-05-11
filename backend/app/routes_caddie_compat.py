@@ -40,7 +40,8 @@ def _wind_for_segment(
     brg = weather.bearing_deg_lat_lon(lat_a, lon_a, lat_b, lon_b)
     along, cross = weather.wind_shot_along_cross(mph, wdeg, brg)
     w_add, w_sub = weather.wind_yard_head_tail_yds(along, baseline_yds)
-    adj = w_add - w_sub
+    # Net vs prior convention: inverted so prior “add yards” scenarios subtract (and vice versa).
+    adj = w_sub - w_add
     rel = weather.wind_relation_label(along, cross, mph)
     return (adj, along, cross, rel)
 

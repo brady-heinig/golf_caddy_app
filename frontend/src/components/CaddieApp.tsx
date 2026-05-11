@@ -96,12 +96,13 @@ function formatWindAdjustmentYds(windAdjYd: number): string {
 
 function distWindAdjClass(windAdjYd: number): string {
   if (!Number.isFinite(windAdjYd) || Math.abs(windAdjYd) < WIND_ADJ_YD_EPS) return "distInfoWindNeutral";
-  return windAdjYd > 0 ? "distInfoWindAdds" : "distInfoWindHelps";
+  // Sign convention matches inverted wind_adjust_yd (+ = tailwind term dominant in net).
+  return windAdjYd > 0 ? "distInfoWindHelps" : "distInfoWindAdds";
 }
 
 function yardChipWindAdjClass(windAdjYd: number): string {
   if (!Number.isFinite(windAdjYd) || Math.abs(windAdjYd) < WIND_ADJ_YD_EPS) return "yardChipWindNeutral";
-  return windAdjYd > 0 ? "yardChipWindAdds" : "yardChipWindHelps";
+  return windAdjYd > 0 ? "yardChipWindHelps" : "yardChipWindAdds";
 }
 
 function formatSignedElevYd(v: number): string {
@@ -580,7 +581,7 @@ export function CaddieApp() {
             const brg = bearingDegrees(player.lat, player.lon, gc.lat, gc.lon);
             const { along } = windShotAlongCross(Number(wx.wind_mph), Number(wx.wind_dir_deg), brg);
             const { add, sub } = windYardHeadTailYds(along, baseline);
-            windAdj = add - sub;
+            windAdj = sub - add;
           }
           const playsLike = baseline + windAdj;
           const out = {
@@ -1418,6 +1419,18 @@ export function CaddieApp() {
         (m as any).setPaintProperty("dynLineLayer", "line-dasharray", [1.2, 1.2]);
       }
 
+      if (!m.getLayer("bendHitLayer")) {
+        m.addLayer({
+          id: "bendHitLayer",
+          type: "circle",
+          source: bendId,
+          paint: {
+            "circle-radius": 28,
+            "circle-color": "#000000",
+            "circle-opacity": 0,
+          } as any,
+        } as any);
+      }
       if (!m.getLayer("bendLayer")) {
         m.addLayer({
           id: "bendLayer",
@@ -1530,8 +1543,15 @@ export function CaddieApp() {
           if (sz.width < 1 || sz.height < 1) return;
           const pad = Math.max(padMinPx, sz.height * padFrac);
           const bearing = turf.bearing(turf.point([a.lon, a.lat]), turf.point([end.lon, end.lat]));
-          const sw: [number, number] = [Math.min(a.lon, end.lon), Math.min(a.lat, end.lat)];
-          const ne: [number, number] = [Math.max(a.lon, end.lon), Math.max(a.lat, end.lat)];
+          const bendPt = bendMapRef.current;
+          const lngs = [a.lon, end.lon];
+          const lats = [a.lat, end.lat];
+          if (bendPt && Number.isFinite(bendPt.lat) && Number.isFinite(bendPt.lon)) {
+            lngs.push(bendPt.lon);
+            lats.push(bendPt.lat);
+          }
+          const sw: [number, number] = [Math.min(...lngs), Math.min(...lats)];
+          const ne: [number, number] = [Math.max(...lngs), Math.max(...lats)];
           m.fitBounds([sw, ne], {
             padding: { top: pad, bottom: pad, left: pad, right: pad },
             bearing,
@@ -1570,30 +1590,71 @@ export function CaddieApp() {
       playerMarker.on("dragend", onPlayerDragEnd);
 
       let dragging = false;
-      const onMove = (e: any) => {
-        if (!dragging) return;
-        const ll = m.unproject(e.point);
-        updateDyn({ lat: ll.lat, lon: ll.lng });
+      let bendDragFrameRaf = 0;
+      const bendTouchMoveOpts: AddEventListenerOptions = { passive: false };
+
+      const stepBendDrag = (lat: number, lon: number) => {
+        updateDyn({ lat, lon });
+        if (bendDragFrameRaf) return;
+        bendDragFrameRaf = requestAnimationFrame(() => {
+          bendDragFrameRaf = 0;
+          applyFrame({ animate: false });
+        });
       };
-      const onUp = () => {
+
+      const bendDocMove = (ev: MouseEvent | TouchEvent) => {
+        if (!dragging) return;
+        ev.preventDefault();
+        let cx: number | undefined;
+        let cy: number | undefined;
+        if ("touches" in ev && ev.touches.length > 0) {
+          cx = ev.touches[0].clientX;
+          cy = ev.touches[0].clientY;
+        } else if ("clientX" in ev) {
+          cx = (ev as MouseEvent).clientX;
+          cy = (ev as MouseEvent).clientY;
+        }
+        if (cx == null || cy == null) return;
+        const r = m.getCanvas().getBoundingClientRect();
+        const ll = m.unproject([cx - r.left, cy - r.top]);
+        stepBendDrag(ll.lat, ll.lng);
+      };
+
+      const detachBendDocDrag = () => {
+        document.removeEventListener("mousemove", bendDocMove);
+        document.removeEventListener("touchmove", bendDocMove, bendTouchMoveOpts);
+        document.removeEventListener("mouseup", bendDocEnd);
+        document.removeEventListener("touchend", bendDocEnd);
+      };
+
+      const bendDocEnd = () => {
+        detachBendDocDrag();
         if (!dragging) return;
         dragging = false;
+        m.dragPan.enable();
+        if (bendDragFrameRaf) {
+          cancelAnimationFrame(bendDragFrameRaf);
+          bendDragFrameRaf = 0;
+        }
         m.getCanvas().style.cursor = "";
+        applyFrame({ animate: true });
       };
+
       const onDown = (e: any) => {
-        const feats = m.queryRenderedFeatures(e.point, { layers: ["bendLayer"] });
+        const feats = m.queryRenderedFeatures(e.point, { layers: ["bendHitLayer", "bendLayer"] });
         if (!feats.length) return;
         dragging = true;
         approachBendUserDraggedRef.current = true;
         m.getCanvas().style.cursor = "grabbing";
+        m.dragPan.disable();
         e.preventDefault();
+        document.addEventListener("mousemove", bendDocMove);
+        document.addEventListener("touchmove", bendDocMove, bendTouchMoveOpts);
+        document.addEventListener("mouseup", bendDocEnd);
+        document.addEventListener("touchend", bendDocEnd);
       };
       m.on("mousedown", onDown);
       m.on("touchstart", onDown);
-      m.on("mousemove", onMove);
-      m.on("touchmove", onMove);
-      m.on("mouseup", onUp);
-      m.on("touchend", onUp);
 
       mapInteractionRef.current = { updateDyn, applyFrame, playerMarker };
 
@@ -1606,6 +1667,9 @@ export function CaddieApp() {
       return () => {
         document.removeEventListener("click", closeYardPopoverDoc);
         if (applyFrameRaf) cancelAnimationFrame(applyFrameRaf);
+        if (bendDragFrameRaf) cancelAnimationFrame(bendDragFrameRaf);
+        detachBendDocDrag();
+        m.dragPan.enable();
         if (pathLegsDebounceRef.current != null) {
           clearTimeout(pathLegsDebounceRef.current);
           pathLegsDebounceRef.current = null;
@@ -1614,10 +1678,6 @@ export function CaddieApp() {
         mapInteractionRef.current = null;
         m.off("mousedown", onDown);
         m.off("touchstart", onDown);
-        m.off("mousemove", onMove);
-        m.off("touchmove", onMove);
-        m.off("mouseup", onUp);
-        m.off("touchend", onUp);
         yardMarker1.remove();
         yardMarker2.remove();
         playerMarker.off("drag", onPlayerDrag);

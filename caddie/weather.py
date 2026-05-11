@@ -130,9 +130,9 @@ def wind_yard_head_tail_yds(along_mph: float, baseline_yds: float) -> tuple[floa
 
 
 def wind_yard_adjust_along_baseline(along_mph: float, baseline_yds: float) -> float:
-    """Net yards to add: headwind add minus tailwind subtract (signed)."""
+    """Signed net wind yards (inverted vs add−sub: tailwind term minus headwind term)."""
     add, sub = wind_yard_head_tail_yds(along_mph, baseline_yds)
-    return add - sub
+    return sub - add
 
 
 def classify_wind_table_category(

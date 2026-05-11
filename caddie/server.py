@@ -27,8 +27,8 @@ def _wind_for_segment(
     baseline_yds: float,
 ) -> tuple[float, float, float, str]:
     """
-    Wind effect on plays-like: baseline + headwind_add − tailwind_subtract.
-    wind_adjust_yd is net (add − subtract), negative when tailwind dominates.
+    Wind effect on plays-like: baseline − headwind_add + tailwind_subtract (inverted vs raw add/sub parts).
+    wind_adjust_yd is net (subtract − add from head/tail decomposition), negative when headwind dominates.
     """
     if wx.get("error") or wx.get("wind_mph") is None or wx.get("wind_dir_deg") is None:
         return (0.0, 0.0, 0.0, "—")
@@ -37,7 +37,7 @@ def _wind_for_segment(
     brg = weather.bearing_deg_lat_lon(lat_a, lon_a, lat_b, lon_b)
     along, cross = weather.wind_shot_along_cross(mph, wdeg, brg)
     w_add, w_sub = weather.wind_yard_head_tail_yds(along, baseline_yds)
-    adj = w_add - w_sub
+    adj = w_sub - w_add
     rel = weather.wind_relation_label(along, cross, mph)
     return (adj, along, cross, rel)
 
@@ -115,7 +115,7 @@ def get_hole(
     w_adj, _w_along, _w_cross, w_rel = _wind_for_segment(
         w, p_lat, p_lon, gc["lat"], gc["lon"], baseline
     )
-    # baseline is elev-adjusted; wind adds headwind yards and subtracts tailwind yards
+    # baseline is elev-adjusted; plays_like applies inverted net wind vs head/tail decomposition
     plays_like_yd = baseline + w_adj
 
     hcp = 15.0 if handicap is None else float(handicap)
@@ -194,7 +194,7 @@ def get_plays_like_path(
         float(g_lon),
         base2,
     )
-    # Each leg: elev baseline + headwind add − tailwind subtract (net in w1/w2)
+    # Each leg: elev baseline + inverted net wind (w_sub − w_add)
     leg1 = base1 + w1
     leg2 = base2 + w2
 
@@ -290,7 +290,7 @@ def caddie_advice(req: CaddieRequest) -> dict[str, Any]:
         gc["lon"],
         baseline,
     )
-    plays_like_yd = int(round(baseline + w_adj))  # + headwind / − tailwind via signed w_adj
+    plays_like_yd = int(round(baseline + w_adj))  # signed w_adj (inverted vs old add−sub convention)
 
     advice = caddie.get_caddie_advice(
         distance_to_pin=int(req.distance_to_pin),

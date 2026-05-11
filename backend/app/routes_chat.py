@@ -101,12 +101,12 @@ def _build_context(
     wind_card = wx.get("wind_dir_card") if wx and not wx.get("error") else None
 
     plays_like = float(distance_yd) + float(elev_adj_yd)
-    # simple wind plays-like: +1 yd per 1 mph headwind, -1 yd per 2 mph tailwind (heuristic)
+    # simple wind plays-like (inverted vs prior): −1 yd per 1 mph headwind, +0.5 yd per mph tailwind
     if wind_mph is not None and wind_rel != "unknown":
         if wind_rel == "headwind":
-            plays_like += 1.0 * float(wind_mph)
+            plays_like -= 1.0 * float(wind_mph)
         elif wind_rel == "tailwind":
-            plays_like -= 0.5 * float(wind_mph)
+            plays_like += 0.5 * float(wind_mph)
 
     gir_model, tour_gir = bench_mod.expected_gir_model_percent(int(round(plays_like)), handicap_index, lie)
     club_seed = _club_suggestion_from_bag(bag, plays_like)

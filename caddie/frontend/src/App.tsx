@@ -67,14 +67,14 @@ function distWindAdjClass(windAdjYd: number): string {
   if (!Number.isFinite(windAdjYd) || Math.abs(windAdjYd) < WIND_ADJ_YD_EPS) {
     return 'distInfoWindNeutral';
   }
-  return windAdjYd > 0 ? 'distInfoWindAdds' : 'distInfoWindHelps';
+  return windAdjYd > 0 ? 'distInfoWindHelps' : 'distInfoWindAdds';
 }
 
 function yardChipWindAdjClass(windAdjYd: number): string {
   if (!Number.isFinite(windAdjYd) || Math.abs(windAdjYd) < WIND_ADJ_YD_EPS) {
     return 'yardChipWindNeutral';
   }
-  return windAdjYd > 0 ? 'yardChipWindAdds' : 'yardChipWindHelps';
+  return windAdjYd > 0 ? 'yardChipWindHelps' : 'yardChipWindAdds';
 }
 
 /** Vertical elevation delta in yards (pin vs player); same scale as plays-like elev term. */
