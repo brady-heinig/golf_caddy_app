@@ -162,16 +162,21 @@ body {
 
 .landingCard {
   width: 100%;
-  max-width: 340px;
+  max-width: 360px;
   display: grid;
   gap: 14px;
   text-align: center;
 }
 
 .landingTitle {
-  font-size: 26px;
+  font-size: 22px;
   font-weight: 1000;
   letter-spacing: 0.2px;
+  line-height: 1.25;
+}
+
+.landingTitleBrand {
+  color: #16a34a;
 }
 
 .landingSub {

@@ -89,14 +89,6 @@ function ShotHistoryInner() {
   return (
     <main style={{ margin: 0, background: "#ffffff", color: "#0b1220" }}>
       <h1 style={{ marginTop: 0 }}>Shot history</h1>
-      <p style={{ opacity: 0.8, maxWidth: 720 }}>
-        Logged swings from rounds and voice check-ins after caddie advice (newest first). Shots from the map/caddie are tied
-        to the active server round; use{" "}
-        <Link href="/rounds" style={{ fontWeight: 700, color: "inherit" }}>
-          Past rounds
-        </Link>{" "}
-        to open a round or filter by <code>?round=</code> in the URL.
-      </p>
       {filterRoundId != null ? (
         <p style={{ marginTop: 8 }}>
           Showing shots for{" "}
