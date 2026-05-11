@@ -17,7 +17,6 @@ type Round = {
 };
 
 export default function RoundsPage() {
-  const [courseId, setCourseId] = useState("stevens_golf_course");
   const [error, setError] = useState<string | null>(null);
   const [active, setActive] = useState<Round[]>([]);
   const [finished, setFinished] = useState<Round[]>([]);
@@ -42,19 +41,6 @@ export default function RoundsPage() {
     refresh();
   }, []);
 
-  async function startRound() {
-    setError(null);
-    try {
-      const r = (await apiFetch("/api/rounds", {
-        method: "POST",
-        body: JSON.stringify({ course_id: courseId })
-      })) as Round;
-      window.location.href = `/rounds/${r.id}`;
-    } catch (e: any) {
-      setError(e?.message || "Failed to start round");
-    }
-  }
-
   async function finishRound(id: number) {
     setError(null);
     try {
@@ -78,25 +64,6 @@ export default function RoundsPage() {
   return (
     <main style={{ margin: 0 }}>
       <h1 style={{ marginTop: 0 }}>Rounds</h1>
-      <p style={{ opacity: 0.8 }}>
-        Start a round, exit anytime, and resume later. Current hole, scorecard, and mapped shot history are stored per round.
-      </p>
-
-      <section style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
-        <label>
-          Course ID{" "}
-          <input
-            value={courseId}
-            onChange={(e) => setCourseId(e.target.value)}
-            style={{ padding: 10, width: 220 }}
-          />
-        </label>
-        <button onClick={startRound} style={{ padding: 12 }}>
-          Start new round
-        </button>
-        <Link href="/settings">Settings</Link>
-        <Link href="/caddie">Map / caddie</Link>
-      </section>
 
       {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
       {loading ? <p>Loading…</p> : null}
