@@ -367,6 +367,9 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
   const [err, setErr] = useState<string | null>(null);
   const [roundMode, setRoundMode] = useState<RoundMode | null>(null);
   const [liveGps, setLiveGps] = useState<LL | null>(null);
+  /** Render-synced ref so map setup always sees latest fix (avoids race when GPS beats marker creation). */
+  const liveGpsRef = useRef<LL | null>(null);
+  liveGpsRef.current = liveGps;
   const [simPos, setSimPos] = useState<LL | null>(null);
   const simHoleInitialized = useRef<number | null>(null);
   const simPosLatestRef = useRef<LL | null>(null);
@@ -564,8 +567,15 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
     }
     if (!navigator.geolocation) return;
     let lastEmit = 0;
-    const THROTTLE_MS = 3000;
+    let firstWatch = true;
+    const THROTTLE_MS = 750;
     const emit = (lat: number, lon: number) => {
+      if (firstWatch) {
+        firstWatch = false;
+        setLiveGps({ lat, lon });
+        lastEmit = Date.now();
+        return;
+      }
       const t = Date.now();
       if (t - lastEmit < THROTTLE_MS) return;
       lastEmit = t;
@@ -577,12 +587,12 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
         lastEmit = Date.now();
       },
       () => {},
-      { enableHighAccuracy: true, maximumAge: 0, timeout: 20_000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 45_000 },
     );
     const wid = navigator.geolocation.watchPosition(
       (pos) => emit(pos.coords.latitude, pos.coords.longitude),
       () => {},
-      { enableHighAccuracy: true, maximumAge: 5000, timeout: 30_000 },
+      { enableHighAccuracy: true, maximumAge: 0, timeout: 45_000 },
     );
     return () => navigator.geolocation.clearWatch(wid);
   }, [roundMode]);
@@ -1391,8 +1401,8 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
       const tee = hole.hole.tee;
       const green = hole.hole.green_center;
       const playerLL: LL =
-        roundMode === "live" && liveGps
-          ? liveGps
+        roundMode === "live" && liveGpsRef.current
+          ? liveGpsRef.current
           : roundMode === "sim" && simPosLatestRef.current
             ? simPosLatestRef.current
             : { lat: tee.lat, lon: tee.lon };
@@ -1860,10 +1870,32 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
 
       mapInteractionRef.current = { updateDyn, applyFrame, playerMarker };
 
+      // If a GPS fix arrived before this marker existed, snap the blue dot to the device now.
+      if (roundMode === "live" && liveGpsRef.current) {
+        const g = liveGpsRef.current;
+        playerMapPosRef.current = g;
+        playerMarker.setLngLat([g.lon, g.lat]);
+        updateDyn(bendMapRef.current ?? bendInit);
+      }
+
       applyFrame({ animate: false });
       requestAnimationFrame(() => {
+        if (roundMode === "live" && liveGpsRef.current) {
+          const g = liveGpsRef.current;
+          playerMapPosRef.current = g;
+          playerMarker.setLngLat([g.lon, g.lat]);
+          updateDyn(bendMapRef.current ?? bendInit);
+        }
         applyFrame({ animate: false });
-        requestAnimationFrame(() => applyFrame({ animate: false }));
+        requestAnimationFrame(() => {
+          if (roundMode === "live" && liveGpsRef.current) {
+            const g = liveGpsRef.current;
+            playerMapPosRef.current = g;
+            playerMarker.setLngLat([g.lon, g.lat]);
+            updateDyn(bendMapRef.current ?? bendInit);
+          }
+          applyFrame({ animate: false });
+        });
       });
 
       return () => {
