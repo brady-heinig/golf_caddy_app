@@ -222,7 +222,9 @@ def build_caddie_advice_context(
     plays = metrics.get("plays_like_yd")
     elev = metrics.get("elev_change_yd")
     wadj = metrics.get("wind_adjust_yd")
-    gir = metrics.get("green_hit_pct")
+    gir = metrics.get("green_hit_pct_model")
+    if gir is None:
+        gir = metrics.get("green_hit_pct")
 
     land_dist_gc = round(haversine_yards(landing_lat, landing_lon, float(hole["green_center"]["lat"]), float(hole["green_center"]["lon"])))
 

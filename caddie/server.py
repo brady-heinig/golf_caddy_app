@@ -120,7 +120,7 @@ def get_hole(
 
     hcp = 15.0 if handicap is None else float(handicap)
     # Use plays-like yards (elevation + wind) for GIR benchmark.
-    gir_pct, _ = benchmark_stats.expected_gir_model_percent(
+    gir_model_pct, tour_gir_pct = benchmark_stats.expected_gir_model_percent(
         int(round(plays_like_yd)), hcp, lie
     )
 
@@ -131,7 +131,8 @@ def get_hole(
         "elev_change_yd": round(elev_adj_yd, 1),
         "wind_adjust_yd": round(w_adj, 1),
         "wind_relation": w_rel,
-        "green_hit_pct": round(float(gir_pct), 2),
+        "green_hit_pct": round(float(tour_gir_pct), 2),
+        "green_hit_pct_model": round(float(gir_model_pct), 2),
     }
 
     return {

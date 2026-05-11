@@ -350,6 +350,33 @@ a:hover {
   border: none;
 }
 
+.phoneShell .btnBrown {
+  background: var(--caddie-brown);
+  color: #fffaf5;
+  border: 1px solid var(--caddie-brown-border);
+}
+
+.phoneShell .btnBrown:hover {
+  background: var(--caddie-brown-hover);
+}
+
+.phoneShell .btnFooterShrink {
+  min-height: 44px;
+  height: auto;
+  min-width: 0;
+  align-self: stretch;
+  flex: 1 1 0;
+  padding: 6px 5px !important;
+  font-size: 11px;
+  line-height: 1.2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  hyphens: auto;
+  text-align: center;
+  box-sizing: border-box;
+}
+
 .phoneShell .footer {
   grid-template-columns: 1.05fr 0.52fr 0.92fr 0.52fr minmax(0, 2fr);
 }
@@ -399,6 +426,9 @@ code {
   --caddie-accent-mid: rgba(22, 163, 74, 0.35);
   --caddie-accent-strong: rgba(22, 163, 74, 0.9);
   --caddie-accent-bg: rgba(22, 163, 74, 0.1);
+  --caddie-brown: #6b4423;
+  --caddie-brown-hover: #7d5030;
+  --caddie-brown-border: #4f3018;
 }
 
 .phoneShell {

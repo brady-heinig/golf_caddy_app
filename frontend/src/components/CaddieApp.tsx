@@ -1684,7 +1684,7 @@ export function CaddieApp() {
           {roundMode === "live" && !liveGps ? <div className="metricSub">Acquiring GPS…</div> : null}
         </div>
         <div style={{ textAlign: "right" }}>
-          <div className="metricLabel">Hit Green</div>
+          <div className="metricLabel">Hit green %</div>
           <div className="metricValue" key={holeNum}>
             {typeof greenHitPct === "number" ? `${greenHitPct}%` : "—"}
           </div>
@@ -1740,10 +1740,20 @@ export function CaddieApp() {
           ▶
         </button>
         <div style={{ display: "flex", gap: 8, alignItems: "stretch", minWidth: 0 }}>
-          <button type="button" className="btn btnPrimary" style={{ flex: 1, padding: "8px 6px", fontSize: 12, whiteSpace: "normal", lineHeight: 1.25 }} onClick={talkWithCaddie} aria-label="Talk with caddie">
+          <button
+            type="button"
+            className="btn btnPrimary btnFooterShrink"
+            onClick={talkWithCaddie}
+            aria-label="Talk with caddie"
+          >
             Talk with caddie
           </button>
-          <button type="button" className="btn" style={{ flex: 1, padding: "8px 6px", fontSize: 12, whiteSpace: "normal", lineHeight: 1.25 }} onClick={openVoiceAskModal} aria-label="Ask question with voice">
+          <button
+            type="button"
+            className="btn btnBrown btnFooterShrink"
+            onClick={openVoiceAskModal}
+            aria-label="Ask question with voice"
+          >
             Ask question
           </button>
         </div>
