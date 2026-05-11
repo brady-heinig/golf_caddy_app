@@ -3,6 +3,8 @@
 // Port of `caddie/frontend/src/App.tsx` so we can host the same experience
 // inside the Vercel-ready Next.js app.
 
+import { apiFetch } from "@/lib/api";
+import { parseScorecardPlayers, type ScorecardPlayerRow } from "@/lib/scorecardRound";
 import { listenOnce } from "@/lib/speechListen";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import maplibregl, { type Map, Marker } from "maplibre-gl";
@@ -29,8 +31,6 @@ type RoundMode = "live" | "sim";
 
 const SCORE_STRIP_MIN = 1;
 const SCORE_STRIP_MAX = 15;
-
-type ScorecardPlayerRow = { id: string; name: string; scores: (number | null)[] };
 
 function genPlayerId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
@@ -322,7 +322,12 @@ function DistanceHeaderTip({
   );
 }
 
-export function CaddieApp() {
+type CaddieAppProps = {
+  /** When set (e.g. `/caddie?round=12`), load that active round’s course + hole then continue in Live or Sim. */
+  resumeRoundId?: number | null;
+};
+
+export function CaddieApp({ resumeRoundId = null }: CaddieAppProps) {
   const [courses, setCourses] = useState<Course[]>([]);
   const [courseId, setCourseId] = useState<string>("stevens_golf_course");
   const [holeNum, setHoleNum] = useState<number>(1);
@@ -378,6 +383,11 @@ export function CaddieApp() {
   const [wxOverride, setWxOverride] = useState<any | null>(null);
   const [metricsOverride, setMetricsOverride] = useState<any | null>(null);
 
+  const [linkedRoundId, setLinkedRoundId] = useState<number | null>(null);
+  const [resumeRoundLoading, setResumeRoundLoading] = useState(false);
+  const [resumeRoundErr, setResumeRoundErr] = useState<string | null>(null);
+  const [modeLinkBusy, setModeLinkBusy] = useState(false);
+
   const mapRef = useRef<Map | null>(null);
   const mapEl = useRef<HTMLDivElement | null>(null);
   const approachBendUserDraggedRef = useRef(false);
@@ -394,6 +404,90 @@ export function CaddieApp() {
   useEffect(() => {
     approachBendUserDraggedRef.current = false;
   }, [holeNum, courseId]);
+
+  useEffect(() => {
+    if (!resumeRoundId) {
+      setLinkedRoundId(null);
+      setResumeRoundErr(null);
+      setResumeRoundLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setResumeRoundLoading(true);
+    setResumeRoundErr(null);
+    (async () => {
+      try {
+        const r = (await apiFetch(`/api/rounds/${resumeRoundId}`)) as {
+          id: number;
+          course_id: string;
+          current_hole: number;
+          status: string;
+          scorecard_json?: string | null;
+        };
+        if (cancelled) return;
+        if (r.status !== "active") {
+          setResumeRoundErr("That round is no longer active. Use Past rounds to open another round or start a new one.");
+          setLinkedRoundId(null);
+          return;
+        }
+        setCourseId(r.course_id);
+        const h = Number(r.current_hole);
+        setHoleNum(Number.isFinite(h) ? Math.min(18, Math.max(1, Math.round(h))) : 1);
+        setLinkedRoundId(r.id);
+        const restored = parseScorecardPlayers(r.scorecard_json ?? null);
+        if (restored) setScorecardPlayers(restored);
+      } catch (e) {
+        if (!cancelled) {
+          setResumeRoundErr(e instanceof Error ? e.message : "Could not load that round.");
+          setLinkedRoundId(null);
+        }
+      } finally {
+        if (!cancelled) setResumeRoundLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [resumeRoundId]);
+
+  useEffect(() => {
+    if (!linkedRoundId || roundMode == null) return;
+    const id = linkedRoundId;
+    const h = holeNum;
+    const scoreJson = JSON.stringify(scorecardPlayers);
+    const t = window.setTimeout(() => {
+      void apiFetch(`/api/rounds/${id}`, {
+        method: "PUT",
+        body: JSON.stringify({ current_hole: h, scorecard_json: scoreJson }),
+      }).catch(() => {});
+    }, 700);
+    return () => window.clearTimeout(t);
+  }, [holeNum, scorecardPlayers, linkedRoundId, roundMode]);
+
+  const beginRoundMode = useCallback(
+    async (mode: RoundMode) => {
+      if (resumeRoundLoading || modeLinkBusy) return;
+      if (linkedRoundId == null) {
+        setModeLinkBusy(true);
+        setResumeRoundErr(null);
+        try {
+          const r = (await apiFetch("/api/rounds", {
+            method: "POST",
+            body: JSON.stringify({ course_id: courseId }),
+          })) as { id: number };
+          setLinkedRoundId(r.id);
+          setRoundMode(mode);
+        } catch (e) {
+          setResumeRoundErr(e instanceof Error ? e.message : "Could not link this session to a round.");
+        } finally {
+          setModeLinkBusy(false);
+        }
+      } else {
+        setRoundMode(mode);
+      }
+    },
+    [resumeRoundLoading, modeLinkBusy, linkedRoundId, courseId],
+  );
 
   useEffect(() => {
     if (roundMode !== "live" || liveGps == null) return;
@@ -936,6 +1030,7 @@ export function CaddieApp() {
           transcript,
           prior_recommended_club: snap.recommendedClub,
           prior_plays_like_yd: snap.playsLikeYd,
+          ...(linkedRoundId != null ? { round_id: linkedRoundId } : {}),
         }),
       });
       if (!logRes.ok) {
@@ -957,7 +1052,7 @@ export function CaddieApp() {
       setListeningLastShot(false);
       setCaddieLoading(false);
     }
-  }, [courseId, fetchCaddieAdviceInternal, lastShotFeedbackPrompt]);
+  }, [courseId, fetchCaddieAdviceInternal, lastShotFeedbackPrompt, linkedRoundId]);
 
   const openVoiceAskModal = useCallback(() => {
     setVoiceAskErr(null);
@@ -1102,6 +1197,7 @@ export function CaddieApp() {
               transcript: t,
               prior_recommended_club: snap.recommendedClub,
               prior_plays_like_yd: snap.playsLikeYd,
+              ...(linkedRoundId != null ? { round_id: linkedRoundId } : {}),
             }),
           });
           if (!logRes.ok) {
@@ -1148,6 +1244,7 @@ export function CaddieApp() {
     liveGps,
     roundMode,
     speakAdviceAutomatically,
+    linkedRoundId,
   ]);
 
   const talkWithCaddie = () => {
@@ -1752,15 +1849,47 @@ export function CaddieApp() {
       <div className="phoneShell modePickerShell">
         <div className="modePickerCard">
           <h1 className="modePickerTitle">Play a round</h1>
-          <p className="modePickerSub">Choose a mode to start.</p>
+          {resumeRoundLoading ? (
+            <p className="modePickerSub">Loading your round…</p>
+          ) : linkedRoundId != null ? (
+            <p className="modePickerSub">
+              Continuing round #{linkedRoundId} on {courseId.replace(/_/g, " ")} — hole {holeNum}. Pick Live or Sim; hole
+              and scorecard sync to Past rounds.
+            </p>
+          ) : (
+            <p className="modePickerSub">
+              Choose a mode to start. A server round is created for this course so your scorecard and logged shots stay with
+              that round.
+            </p>
+          )}
+          {resumeRoundErr ? (
+            <p className="modePickerSub" style={{ color: "#b91c1c", marginBottom: 12 }}>
+              {resumeRoundErr}
+            </p>
+          ) : null}
           <div className="modePickerBtns">
-            <button type="button" className="modePickerBtn modePickerBtnPrimary" onClick={() => setRoundMode("live")}>
+            <button
+              type="button"
+              className="modePickerBtn modePickerBtnPrimary"
+              disabled={resumeRoundLoading || modeLinkBusy}
+              onClick={() => void beginRoundMode("live")}
+            >
               Live round
             </button>
-            <button type="button" className="modePickerBtn" onClick={() => setRoundMode("sim")}>
+            <button
+              type="button"
+              className="modePickerBtn"
+              disabled={resumeRoundLoading || modeLinkBusy}
+              onClick={() => void beginRoundMode("sim")}
+            >
               Simulated round
             </button>
           </div>
+          <p className="modePickerSub" style={{ marginTop: 16, fontSize: 13 }}>
+            <a href="/rounds" style={{ color: "inherit", fontWeight: 700 }}>
+              Past rounds
+            </a>
+          </p>
         </div>
       </div>
     );
@@ -1783,6 +1912,14 @@ export function CaddieApp() {
             ) : null}
           </div>
           {roundMode === "live" && !liveGps ? <div className="metricSub">Acquiring GPS…</div> : null}
+          {linkedRoundId ? (
+            <div className="metricSub" style={{ marginTop: 4 }}>
+              <a href="/rounds" style={{ color: "inherit", fontWeight: 700 }}>
+                Round #{linkedRoundId}
+              </a>
+              {" · hole & scorecard sync to Past rounds"}
+            </div>
+          ) : null}
         </div>
         <div style={{ textAlign: "right" }}>
           <div className="metricLabel">Hit green %</div>

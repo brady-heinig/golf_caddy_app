@@ -13,9 +13,9 @@ from shapely.geometry import LineString, Point
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from .caddie_advice_context import build_caddie_advice_context
+from .caddie_advice_context import build_caddie_advice_context, build_voice_ask_scoped_context
 from .caddie_lie_detect import classify_lie_from_blue_dot
-from .caddie_shot_intel import resolve_intended_landing
+from .caddie_shot_intel import gather_shot_intel, resolve_intended_landing
 from .elevenlabs_tts import synthesize_speech_mp3
 from .legacy import course_data as course_data_mod
 from .legacy import course_features
@@ -29,7 +29,6 @@ from .caddie_advice_llm import run_caddie_advice_chain
 from .caddie_voice_llm import (
     best_bag_key_for_extraction,
     extract_shot_feedback_json,
-    format_voice_hole_situation,
     generate_last_shot_question,
     refine_bag_carry,
     voice_followup_answer,
@@ -100,6 +99,7 @@ class LogShotFeedbackIn(BaseModel):
     transcript: str = Field(min_length=1, max_length=4000)
     prior_recommended_club: str = Field("", max_length=64)
     prior_plays_like_yd: float = Field(ge=0.0, le=700.0)
+    round_id: int | None = Field(default=None, ge=1)
 
 
 class LogShotFeedbackOut(BaseModel):
@@ -170,15 +170,27 @@ def _get_user_settings(conn: psycopg.Connection, user_id: int) -> dict[str, Any]
     return {"handicap_index": float(h), "bag": bag, "shot_shapes": shot_shapes}
 
 
-def _next_feedback_shot_number(conn: psycopg.Connection, user_id: int, course_id: str) -> int:
-    row = conn.execute(
-        """
-        SELECT COALESCE(MAX(shot_number), 0) + 1 AS n
-        FROM shots
-        WHERE user_id = %s AND course_id = %s AND round_id IS NULL
-        """,
-        (user_id, course_id),
-    ).fetchone()
+def _next_feedback_shot_number(
+    conn: psycopg.Connection, user_id: int, course_id: str, round_id: int | None
+) -> int:
+    if round_id is None:
+        row = conn.execute(
+            """
+            SELECT COALESCE(MAX(shot_number), 0) + 1 AS n
+            FROM shots
+            WHERE user_id = %s AND course_id = %s AND round_id IS NULL
+            """,
+            (user_id, course_id),
+        ).fetchone()
+    else:
+        row = conn.execute(
+            """
+            SELECT COALESCE(MAX(shot_number), 0) + 1 AS n
+            FROM shots
+            WHERE user_id = %s AND course_id = %s AND round_id = %s
+            """,
+            (user_id, course_id, round_id),
+        ).fetchone()
     return int(row["n"]) if row else 1
 
 
@@ -311,6 +323,185 @@ def _validate_bend_pair(lat: float | None, lon: float | None) -> None:
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Provide both bend_lat and bend_lon, or omit both.",
         )
+
+
+def _load_caddie_grounding_payload(
+    conn: psycopg.Connection,
+    uid: int,
+    *,
+    course_id: str,
+    hole_number: int,
+    player_lat: float,
+    player_lon: float,
+    bend_lat: float | None,
+    bend_lon: float | None,
+) -> dict[str, Any]:
+    """One `gather_shot_intel` + hole payload for advice and voice (avoids duplicate map work)."""
+    s = _get_user_settings(conn, uid)
+    hcp = float(s["handicap_index"])
+    bag = dict(s["bag"] or {})
+    shot_shapes_store = s.get("shot_shapes") or {}
+    shot_shapes_norm = normalize_shot_shapes(shot_shapes_store if isinstance(shot_shapes_store, dict) else {})
+
+    course = course_data_mod.COURSES.get(course_id)
+    if not course:
+        raise HTTPException(status_code=404, detail="Unknown course_id")
+    holes = course.get("holes") or []
+    if hole_number < 1 or hole_number > len(holes):
+        raise HTTPException(status_code=404, detail="Invalid hole_number")
+    hole_dict = holes[hole_number - 1]
+    try:
+        features_for_lie = course_features.load_hole_feature_collection(course_id, hole_number)
+    except Exception:
+        features_for_lie = {"type": "FeatureCollection", "features": []}
+
+    lie_auto, lie_meta = classify_lie_from_blue_dot(
+        player_lat,
+        player_lon,
+        hole_dict,
+        features_for_lie,
+    )
+
+    payload = get_hole(
+        course_id=course_id,
+        hole_number=hole_number,
+        player_lat=player_lat,
+        player_lon=player_lon,
+        handicap=hcp,
+        lie=lie_auto,
+    )
+
+    hole = payload["hole"]
+    gc = hole["green_center"]
+    metrics = payload["metrics"]
+    dist_pin = float(metrics.get("distance_yd") or 0.0)
+    llat, llon, lmeta = resolve_intended_landing(
+        player_lat,
+        player_lon,
+        float(gc["lat"]),
+        float(gc["lon"]),
+        bend_lat,
+        bend_lon,
+        bag,
+        hole,
+        lie_auto,
+        dist_pin,
+    )
+
+    wx = payload["weather"]
+    features = payload["features"]
+    course_nm = (payload.get("course") or {}).get("name")
+
+    plays_like = float(metrics.get("plays_like_yd") or 0.0)
+    map_target_plays_like_yds: float | None = None
+    if bend_lat is not None and bend_lon is not None:
+        try:
+            plp = get_plays_like_path(
+                course_id=course_id,
+                hole_number=hole_number,
+                player_lat=float(player_lat),
+                player_lon=float(player_lon),
+                bend_lat=float(bend_lat),
+                bend_lon=float(bend_lon),
+            )
+            leg1 = plp.get("leg1_plays_like_yd")
+            if leg1 is not None and float(leg1) >= 1.0:
+                map_target_plays_like_yds = float(leg1)
+        except Exception:
+            map_target_plays_like_yds = None
+
+    club_context_yd = map_target_plays_like_yds if map_target_plays_like_yds is not None else plays_like
+    club_pick = pick_club_for_plays_like_yards(bag, club_context_yd)
+    eff_shape = shot_shape_for_club(str(club_pick["club"]), shot_shapes_norm)
+
+    intel = gather_shot_intel(
+        hole=hole,
+        features=features,
+        player_lat=player_lat,
+        player_lon=player_lon,
+        landing_lat=llat,
+        landing_lon=llon,
+        landing_meta=dict(lmeta),
+        bag=bag,
+        lie=lie_auto,
+        metrics=metrics,
+        shot_shapes=shot_shapes_norm,
+        lie_detect_detail=lie_meta,
+        handicap=hcp,
+        map_target_plays_like_yds=map_target_plays_like_yds,
+    )
+
+    hole_par = int(hole.get("par") or 4)
+    return {
+        "course_id": course_id,
+        "course_name": course_nm,
+        "hole": hole,
+        "metrics": metrics,
+        "wx": wx,
+        "features": features,
+        "player_lat": player_lat,
+        "player_lon": player_lon,
+        "landing_lat": llat,
+        "landing_lon": llon,
+        "landing_meta": lmeta,
+        "lie": lie_auto.lower(),
+        "lie_detect_meta": lie_meta,
+        "handicap": hcp,
+        "bag": bag,
+        "shot_shapes": shot_shapes_norm,
+        "map_target_plays_like_yds": map_target_plays_like_yds,
+        "club_pick": club_pick,
+        "club_context_yd": float(club_context_yd),
+        "hole_par": hole_par,
+        "shot_shape": eff_shape,
+        "intel": intel,
+    }
+
+
+def _build_full_caddie_grounding_bundle(
+    conn: psycopg.Connection,
+    uid: int,
+    *,
+    course_id: str,
+    hole_number: int,
+    player_lat: float,
+    player_lon: float,
+    bend_lat: float | None,
+    bend_lon: float | None,
+) -> tuple[str, dict[str, Any], float, int]:
+    """Same context string + club pick as POST /advice (STRUCTURED_SHOT_INTEL, weather, bag, hazards, etc.)."""
+    p = _load_caddie_grounding_payload(
+        conn,
+        uid,
+        course_id=course_id,
+        hole_number=hole_number,
+        player_lat=player_lat,
+        player_lon=player_lon,
+        bend_lat=bend_lat,
+        bend_lon=bend_lon,
+    )
+    ctx = build_caddie_advice_context(
+        course_id=p["course_id"],
+        course_name=p["course_name"],
+        hole=p["hole"],
+        metrics=p["metrics"],
+        wx=p["wx"],
+        features=p["features"],
+        player_lat=p["player_lat"],
+        player_lon=p["player_lon"],
+        landing_lat=p["landing_lat"],
+        landing_lon=p["landing_lon"],
+        landing_meta=p["landing_meta"],
+        lie=p["lie"],
+        shot_shape=p["shot_shape"],
+        handicap=p["handicap"],
+        bag=p["bag"],
+        shot_shapes=p["shot_shapes"],
+        lie_detect_meta=p["lie_detect_meta"],
+        map_target_plays_like_yds=p["map_target_plays_like_yds"],
+        intel=p["intel"],
+    )
+    return ctx, p["club_pick"], float(p["club_context_yd"]), int(p["hole_par"])
 
 
 def _extract_osm_hole_path_lon_lat(features: dict[str, Any]) -> list[tuple[float, float]]:
@@ -476,102 +667,15 @@ def caddie_advice(
 ) -> CaddieAdviceOut:
     _validate_bend(body)
     uid = int(user["id"])
-    s = _get_user_settings(conn, uid)
-    hcp = float(s["handicap_index"])
-    bag = dict(s["bag"] or {})
-    shot_shapes_store = s.get("shot_shapes") or {}
-    shot_shapes_norm = normalize_shot_shapes(shot_shapes_store if isinstance(shot_shapes_store, dict) else {})
-
-    course = course_data_mod.COURSES.get(body.course_id)
-    if not course:
-        raise HTTPException(status_code=404, detail="Unknown course_id")
-    holes = course.get("holes") or []
-    if body.hole_number < 1 or body.hole_number > len(holes):
-        raise HTTPException(status_code=404, detail="Invalid hole_number")
-    hole_dict = holes[body.hole_number - 1]
-    try:
-        features_for_lie = course_features.load_hole_feature_collection(body.course_id, body.hole_number)
-    except Exception:
-        features_for_lie = {"type": "FeatureCollection", "features": []}
-
-    lie_auto, lie_meta = classify_lie_from_blue_dot(
-        body.player_lat,
-        body.player_lon,
-        hole_dict,
-        features_for_lie,
-    )
-
-    payload = get_hole(
+    ctx, club_pick, club_context_yd, hole_par = _build_full_caddie_grounding_bundle(
+        conn,
+        uid,
         course_id=body.course_id,
         hole_number=body.hole_number,
         player_lat=body.player_lat,
         player_lon=body.player_lon,
-        handicap=hcp,
-        lie=lie_auto,
-    )
-
-    hole = payload["hole"]
-    gc = hole["green_center"]
-    metrics = payload["metrics"]
-    dist_pin = float(metrics.get("distance_yd") or 0.0)
-    llat, llon, lmeta = resolve_intended_landing(
-        body.player_lat,
-        body.player_lon,
-        float(gc["lat"]),
-        float(gc["lon"]),
-        body.bend_lat,
-        body.bend_lon,
-        bag,
-        hole,
-        lie_auto,
-        dist_pin,
-    )
-
-    wx = payload["weather"]
-    features = payload["features"]
-    course_nm = (payload.get("course") or {}).get("name")
-
-    plays_like = float(metrics.get("plays_like_yd") or 0.0)
-    map_target_plays_like_yds: float | None = None
-    if body.bend_lat is not None and body.bend_lon is not None:
-        try:
-            plp = get_plays_like_path(
-                course_id=body.course_id,
-                hole_number=body.hole_number,
-                player_lat=float(body.player_lat),
-                player_lon=float(body.player_lon),
-                bend_lat=float(body.bend_lat),
-                bend_lon=float(body.bend_lon),
-            )
-            leg1 = plp.get("leg1_plays_like_yd")
-            if leg1 is not None and float(leg1) >= 1.0:
-                map_target_plays_like_yds = float(leg1)
-        except Exception:
-            map_target_plays_like_yds = None
-
-    club_context_yd = map_target_plays_like_yds if map_target_plays_like_yds is not None else plays_like
-    club_pick = pick_club_for_plays_like_yards(bag, club_context_yd)
-    eff_shape = shot_shape_for_club(str(club_pick["club"]), shot_shapes_norm)
-
-    ctx = build_caddie_advice_context(
-        course_id=body.course_id,
-        course_name=course_nm,
-        hole=hole,
-        metrics=metrics,
-        wx=wx,
-        features=features,
-        player_lat=body.player_lat,
-        player_lon=body.player_lon,
-        landing_lat=llat,
-        landing_lon=llon,
-        landing_meta=lmeta,
-        lie=lie_auto.lower(),
-        shot_shape=eff_shape,
-        handicap=hcp,
-        bag=bag,
-        shot_shapes=shot_shapes_norm,
-        lie_detect_meta=lie_meta,
-        map_target_plays_like_yds=map_target_plays_like_yds,
+        bend_lat=body.bend_lat,
+        bend_lon=body.bend_lon,
     )
 
     user_line = (body.message or "").strip()
@@ -592,7 +696,7 @@ def caddie_advice(
             user_line=user_line,
             client=client,
             model=model,
-            hole_par=int(hole.get("par") or 4),
+            hole_par=hole_par,
         )
         assistant = f"{briefing}\n---\nSUMMARY: {summary_plain}"
     except Exception as e:
@@ -683,7 +787,30 @@ def log_last_shot_feedback(
     except (TypeError, ValueError):
         dist_ach = None
 
-    sn = _next_feedback_shot_number(conn, uid, body.course_id)
+    rid: int | None = body.round_id
+    if rid is not None:
+        rr = conn.execute(
+            """
+            SELECT id, user_id, course_id, status
+            FROM rounds
+            WHERE id = %s
+            """,
+            (rid,),
+        ).fetchone()
+        if not rr or int(rr["user_id"]) != uid:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Round not found")
+        if str(rr["course_id"]) != str(body.course_id):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="round_id does not match course_id",
+            )
+        if str(rr["status"]) in ("deleted",):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot log shots to a deleted round",
+            )
+
+    sn = _next_feedback_shot_number(conn, uid, body.course_id, rid)
     dist_before = int(round(min(700.0, max(0.0, float(body.prior_plays_like_yd)))))
 
     conn.execute(
@@ -696,7 +823,7 @@ def log_last_shot_feedback(
             proximity_ft
         )
         VALUES (
-            %s, NULL, %s, %s, %s,
+            %s, %s, %s, %s, %s,
             %s, %s, %s, %s,
             %s, %s, %s,
             %s, %s, %s,
@@ -705,6 +832,7 @@ def log_last_shot_feedback(
         """,
         (
             uid,
+            rid,
             body.course_id,
             body.hole_number,
             sn,
@@ -791,7 +919,7 @@ def caddie_voice_conversation_turn(
             detail="Conversation is too long; close and open a new ask session.",
         )
     uid = int(user["id"])
-    g = _resolve_voice_grounding(
+    p = _load_caddie_grounding_payload(
         conn,
         uid,
         course_id=body.course_id,
@@ -801,16 +929,27 @@ def caddie_voice_conversation_turn(
         bend_lat=body.bend_lat,
         bend_lon=body.bend_lon,
     )
-    situation = format_voice_hole_situation(
-        course_name=g.course_name,
-        hole_number=g.hole_number,
-        par=g.par,
-        plays_like_yds=g.plays_like_yds,
-        lie_label=g.lie_label,
-        landing_hint=g.landing_hint,
+    last_q = body.messages[-1].content
+    grounding_ctx = build_voice_ask_scoped_context(
+        user_question=last_q,
+        intel=p["intel"],
+        course_id=p["course_id"],
+        course_name=p["course_name"],
+        hole=p["hole"],
+        metrics=p["metrics"],
+        wx=p["wx"],
+        features=p["features"],
+        player_lat=p["player_lat"],
+        player_lon=p["player_lon"],
+        landing_lat=p["landing_lat"],
+        landing_lon=p["landing_lon"],
+        landing_meta=p["landing_meta"],
+        lie=p["lie"],
+        handicap=p["handicap"],
+        bag=p["bag"],
     )
     transcript = [(m.role, m.content) for m in body.messages]
-    ans = voice_thread_reply(situation=situation, transcript=transcript)
+    ans = voice_thread_reply(grounding_context=grounding_ctx, transcript=transcript)
     return VoiceConversationTurnOut(answer_summary=ans.strip())
 
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Annotated
 
@@ -24,17 +25,27 @@ class RoundOut(BaseModel):
     started_at: str
     updated_at: str
     notes: str | None = None
+    scorecard_json: str | None = None
 
 
 class RoundUpdateIn(BaseModel):
     current_hole: int | None = Field(default=None, ge=1, le=18)
     notes: str | None = Field(default=None, max_length=2000)
+    scorecard_json: str | None = Field(default=None, max_length=200_000)
 
 
 def _iso(v) -> str:
     if isinstance(v, datetime):
         return v.isoformat()
     return str(v)
+
+
+def _scorecard_from_row(row) -> str | None:
+    try:
+        v = row["scorecard_json"]
+    except (KeyError, TypeError):
+        return None
+    return str(v) if v is not None else None
 
 
 def _row_to_round(row) -> RoundOut:
@@ -46,7 +57,32 @@ def _row_to_round(row) -> RoundOut:
         started_at=_iso(row["started_at"]),
         updated_at=_iso(row["updated_at"]),
         notes=row["notes"],
+        scorecard_json=_scorecard_from_row(row),
     )
+
+
+def _validate_scorecard_json_payload(raw: str) -> str:
+    """Ensure client payload is a compact JSON array of player rows; raises HTTPException on bad input."""
+    s = raw.strip()
+    if not s:
+        raise ValueError("empty")
+    try:
+        data = json.loads(s)
+    except json.JSONDecodeError as e:
+        raise ValueError("invalid json") from e
+    if not isinstance(data, list):
+        raise ValueError("not an array")
+    if len(data) > 8:
+        raise ValueError("too many players")
+    for item in data:
+        if not isinstance(item, dict):
+            raise ValueError("player must be object")
+        if "scores" in item and not isinstance(item["scores"], list):
+            raise ValueError("scores must be array")
+        sc = item.get("scores")
+        if isinstance(sc, list) and len(sc) > 24:
+            raise ValueError("scores too long")
+    return s
 
 
 @router.post("", response_model=RoundOut)
@@ -123,13 +159,22 @@ def update_round(
 
     current_hole = body.current_hole if body.current_hole is not None else int(row["current_hole"])
     notes = body.notes if body.notes is not None else row["notes"]
+    new_sc = _scorecard_from_row(row)
+    if body.scorecard_json is not None and body.scorecard_json.strip() != "":
+        try:
+            new_sc = _validate_scorecard_json_payload(body.scorecard_json)
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid scorecard_json: {e}",
+            ) from e
     conn.execute(
         """
         UPDATE rounds
-        SET current_hole = %s, notes = %s, updated_at = now()
+        SET current_hole = %s, notes = %s, scorecard_json = %s, updated_at = now()
         WHERE id = %s AND user_id = %s
         """,
-        (current_hole, notes, round_id, int(user["id"])),
+        (current_hole, notes, new_sc, round_id, int(user["id"])),
     )
     conn.commit()
     updated = conn.execute(

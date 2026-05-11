@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 from typing import Any
 
 from shapely.geometry import Point, shape
@@ -184,23 +185,25 @@ def build_caddie_advice_context(
     shot_shapes: dict[str, Any] | None,
     lie_detect_meta: dict[str, Any] | None = None,
     map_target_plays_like_yds: float | None = None,
+    intel: dict[str, Any] | None = None,
 ) -> str:
-    intel = gather_shot_intel(
-        hole=hole,
-        features=features,
-        player_lat=player_lat,
-        player_lon=player_lon,
-        landing_lat=landing_lat,
-        landing_lon=landing_lon,
-        landing_meta=dict(landing_meta),
-        bag=bag,
-        lie=lie,
-        metrics=metrics,
-        shot_shapes=shot_shapes,
-        lie_detect_detail=lie_detect_meta,
-        handicap=handicap,
-        map_target_plays_like_yds=map_target_plays_like_yds,
-    )
+    if intel is None:
+        intel = gather_shot_intel(
+            hole=hole,
+            features=features,
+            player_lat=player_lat,
+            player_lon=player_lon,
+            landing_lat=landing_lat,
+            landing_lon=landing_lon,
+            landing_meta=dict(landing_meta),
+            bag=bag,
+            lie=lie,
+            metrics=metrics,
+            shot_shapes=shot_shapes,
+            lie_detect_detail=lie_detect_meta,
+            handicap=handicap,
+            map_target_plays_like_yds=map_target_plays_like_yds,
+        )
     hz_osm = hazards_near_landing(features, landing_lat, landing_lon)
     hz_static = hole.get("hazards") or []
     static_lines: list[str] = []
@@ -290,5 +293,164 @@ def build_caddie_advice_context(
                 "GO_FOR_IT: phrase as committing to holding the putting surface versus a more conservative spot still on THE GREEN—not driver-at-pin-from-200-yards rhetoric.",
             ]
         )
+
+    return "\n".join(parts)
+
+
+def _voice_question_topics(user_question: str) -> set[str]:
+    q = (user_question or "").strip().lower()
+    out: set[str] = set()
+    if not q:
+        return out
+    rules: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("weather", ("wind", "breeze", "gust", "headwind", "tailwind", "weather", "mph", "blowing")),
+        ("hazards", ("hazard", "bunker", "sand", "water", "penalty", "trouble", "avoid", "miss", "out of bounds")),
+        ("club", ("club", "what do i hit", "what should i hit", "which club", "iron", "wood", "driver", "wedge", "hybrid", "harder", "softer", "swing", "between clubs", "one less", "one more")),
+        ("yardage", ("yard", "yards", "how far", "distance", "plays-like", "plays like", "elevation", "uphill", "downhill")),
+        ("aim", ("aim", "target", "start line", "alignment", "draw", "fade", "shape")),
+        ("fairway", ("fairway", "narrow", "wide", "corridor", "landing")),
+        ("next", ("next shot", "leave me", "after this", "what if i", "approach", "putt")),
+        ("lie", ("rough", "buried", "fried", "plugged", "above my feet", "below my feet", "ball below", "ball above", "bad lie", "good lie", "the lie")),
+        ("green", ("green", "putting", "tiers", "fringe", "hold the green", "miss long", "miss short")),
+        ("stats", ("gir", "hit green", "percentage")),
+        ("full", ("everything", "all details", "full picture", "whole breakdown", "all the data")),
+    )
+    for tag, words in rules:
+        if any(w in q for w in words):
+            out.add(tag)
+    if re.search(r"\blong\b", q) or re.search(r"\bshort\b", q):
+        out.add("yardage")
+    if re.search(r"\bpin\b", q):
+        out.add("green")
+    return out
+
+
+def build_voice_ask_scoped_context(
+    *,
+    user_question: str,
+    intel: dict[str, Any],
+    course_id: str,
+    course_name: str | None,
+    hole: dict[str, Any],
+    metrics: dict[str, Any],
+    wx: dict[str, Any],
+    features: dict[str, Any],
+    player_lat: float,
+    player_lon: float,
+    landing_lat: float,
+    landing_lon: float,
+    landing_meta: dict[str, Any],
+    lie: str,
+    handicap: float,
+    bag: dict[str, Any],
+) -> str:
+    """Smaller, question-scoped context for Ask-the-caddie voice turns (vs full build_caddie_advice_context)."""
+    topics = _voice_question_topics(user_question)
+
+    wx_line = "N/A"
+    if wx and not wx.get("error"):
+        mph = wx.get("wind_mph")
+        card = wx.get("wind_dir_card")
+        wrel = metrics.get("wind_relation", "—")
+        t = wx.get("temp_f")
+        wx_line = f"{mph} mph from {card} ({wrel}); temp ~{t}°F"
+
+    d_pin = metrics.get("distance_yd")
+    plays = metrics.get("plays_like_yd")
+    elev = metrics.get("elev_change_yd")
+    wadj = metrics.get("wind_adjust_yd")
+    gir = metrics.get("green_hit_pct_model")
+    if gir is None:
+        gir = metrics.get("green_hit_pct")
+
+    hz_osm = hazards_near_landing(features, landing_lat, landing_lon)
+    hz_static = hole.get("hazards") or []
+    static_lines: list[str] = []
+    for h in hz_static[:12]:
+        if isinstance(h, dict):
+            static_lines.append(f"- {h.get('type', 'hazard')}: {h.get('note', '')}".strip())
+        else:
+            static_lines.append(f"- {h}")
+
+    green_txt = green_miss_hint_text(hole, player_lat, player_lon)
+    land_dist_gc = round(
+        haversine_yards(landing_lat, landing_lon, float(hole["green_center"]["lat"]), float(hole["green_center"]["lon"]))
+    )
+
+    cr = intel.get("club_recommendation") or {}
+    cfp = cr.get("club_for_adjusted_plays_like") or {}
+    shape_info = intel.get("shot_shape_from_settings") or {}
+
+    parts: list[str] = [
+        "=== VOICE_ASK_CONTEXT (trimmed to the latest question; treat as facts) ===",
+        f"PLAYER ASKED: {user_question.strip() or '(empty)'}",
+        "",
+        "--- CORE (always) ---",
+        f"Course/hole: {course_name or course_id} — #{hole.get('number')} par {hole.get('par')} hdcp {hole.get('handicap')}",
+        f"Yards: true {d_pin} to pin | plays-like {plays} | elev adj {elev} | wind adj {wadj} ({metrics.get('wind_relation', '—')})",
+        f"Lie: {lie} | model GIR%≈ {gir}% @ hcp {handicap:.1f}",
+        f"Recommended club (bag vs basis): {cfp.get('club', '?')} — {cr.get('club_distance_basis')} @ {cr.get('club_distance_basis_yds')} yd | "
+        f"go_for_it={cr.get('go_for_it')} | positional_to_target={cr.get('positional_play_to_landing')}",
+        f"Shot shape (settings bucket): {shape_info.get('shape', '—')} ({shape_info.get('club_category', '—')})",
+    ]
+
+    if "full" in topics:
+        parts.extend(["", "--- STRUCTURED_SHOT_INTEL (full JSON) ---", json.dumps(intel, indent=2)])
+        return "\n".join(parts)
+
+    if "weather" in topics:
+        parts.extend(["", "--- WEATHER ---", wx_line])
+
+    geo = topics & {"yardage", "aim", "fairway", "lie"}
+    if geo:
+        parts.append("")
+        parts.append("--- POSITION / TARGET / FAIRWAY / LIE ---")
+        if topics & {"yardage", "aim", "fairway"}:
+            parts.append(f"~{land_dist_gc} yd from mapped aim to pin; target set via: {landing_meta.get('how', 'unknown')}")
+            parts.append(json.dumps(intel.get("intended_landing_target"), indent=2))
+        if "fairway" in topics:
+            parts.append(json.dumps(intel.get("fairway_at_landing"), indent=2))
+        if "aim" in topics:
+            parts.append(json.dumps(shape_info, indent=2))
+        if "lie" in topics:
+            parts.append(json.dumps(intel.get("lie_and_situation"), indent=2))
+
+    if "club" in topics:
+        parts.extend(["", "--- CLUB STRATEGY (detail) ---", json.dumps(cr, indent=2), "", "--- BAG CARRIES ---", format_bag_lines(bag, limit=18)])
+
+    if "hazards" in topics:
+        cor = {
+            "bunkers_near_tee_shot_corridor": intel.get("bunkers_near_tee_shot_corridor"),
+            "major_trouble_near_corridor": intel.get("major_trouble_near_corridor"),
+        }
+        parts.extend(
+            [
+                "",
+                "--- HAZARDS / TROUBLE ---",
+                "Near landing (OSM):",
+                "\n".join(f"- {x}" for x in hz_osm) if hz_osm else "- None flagged within ~60 yd of landing target",
+                "",
+                "Note card / static:",
+                "\n".join(static_lines) if static_lines else "- None",
+                "",
+                json.dumps(cor, indent=2),
+            ]
+        )
+
+    if "next" in topics:
+        parts.extend(["", "--- NEXT SHOT IF PLAN WORKS ---", json.dumps(intel.get("next_shot_if_plan_works"), indent=2)])
+
+    if "green" in topics:
+        parts.extend(["", "--- GREEN / MISS ---", green_txt])
+
+    if "stats" in topics:
+        parts.extend(["", "--- MODEL STATS ---", f"plays-like {plays} yd | GIR model {gir}% @ handicap {handicap:.1f}"])
+
+    # Vague question (no topic keywords): still give a short next-shot line so the model isn't blind
+    if "full" not in topics and not topics:
+        ns = intel.get("next_shot_if_plan_works") or {}
+        summ = str(ns.get("summary", "")).strip()
+        if summ:
+            parts.extend(["", "--- NEXT (short) ---", summ[:500]])
 
     return "\n".join(parts)

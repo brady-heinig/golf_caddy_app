@@ -180,7 +180,7 @@ def format_voice_hole_situation(
 
 def voice_thread_reply(
     *,
-    situation: str,
+    grounding_context: str,
     transcript: list[tuple[str, str]],
 ) -> str:
     """Next caddie reply in a multi-turn voice conversation; uses full transcript as memory."""
@@ -191,8 +191,12 @@ def voice_thread_reply(
     convo = "\n".join(lines)
     sys = (
         "You are the player's on-course golf caddie in a **continuing voice conversation**.\n"
-        "You receive the current hole situation (facts) and the full dialogue so far.\n"
+        "You receive VOICE_ASK_CONTEXT: a **trimmed** fact block built from the same map/metrics/bag pipeline as the "
+        "main caddie, but only sections relevant to the player's **latest question** (plus a short CORE summary). "
+        "If they ask for 'everything' / full detail, the context may include full STRUCTURED_SHOT_INTEL JSON.\n"
         "Rules:\n"
+        "- Treat the provided sections as **ground truth** for yardages, wind, trouble, and club-vs-distance; "
+        "do not contradict them unless the player corrects you with new facts.\n"
         "- Respond with **exactly one sentence** unless the player explicitly asked for two distinct things; "
         "if two, use at most two short clauses in one breath (still one sentence).\n"
         "- Your reply must **directly address their last message** and stay consistent with **everything the player "
@@ -200,7 +204,8 @@ def voice_thread_reply(
         "- Do not reset the topic unless they changed it; use prior user lines as binding context.\n"
         "- No bullets, no recap of the whole thread, no 'as we discussed' padding.\n"
         "- Stay within on-course advice; if unclear, ask one clarifying thing in that single sentence.\n"
-        f"\nSITUATION (grounding — use if relevant):\n{situation.strip()}\n"
+        "\nVOICE_ASK_CONTEXT:\n"
+        f"{grounding_context.strip()}\n"
     )
     usr = (
         "CONVERSATION (chronological, oldest first):\n"

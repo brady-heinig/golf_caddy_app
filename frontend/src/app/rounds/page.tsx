@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
+import { parseScorecardPlayers, primaryStrokeTotals } from "@/lib/scorecardRound";
 
 type Round = {
   id: number;
@@ -12,6 +13,7 @@ type Round = {
   current_hole: number;
   started_at: string;
   updated_at: string;
+  scorecard_json?: string | null;
 };
 
 export default function RoundsPage() {
@@ -77,7 +79,7 @@ export default function RoundsPage() {
     <main style={{ margin: 0 }}>
       <h1 style={{ marginTop: 0 }}>Rounds</h1>
       <p style={{ opacity: 0.8 }}>
-        Start a round, exit anytime, and resume later. (Progress is stored server-side.)
+        Start a round, exit anytime, and resume later. Current hole, scorecard, and mapped shot history are stored per round.
       </p>
 
       <section style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
@@ -93,6 +95,7 @@ export default function RoundsPage() {
           Start new round
         </button>
         <Link href="/settings">Settings</Link>
+        <Link href="/caddie">Map / caddie</Link>
       </section>
 
       {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
@@ -103,8 +106,25 @@ export default function RoundsPage() {
       <ul style={{ paddingLeft: 18 }}>
         {active.map((r) => (
           <li key={r.id} style={{ marginBottom: 8 }}>
-            <Link href={`/rounds/${r.id}`}>Round #{r.id}</Link> — {r.course_id} — hole{" "}
-            {r.current_hole}{" "}
+            <Link href={`/caddie?round=${r.id}`} style={{ fontWeight: 800 }}>
+              Continue round #{r.id}
+            </Link>
+            <span style={{ opacity: 0.85 }}>
+              {" "}
+              — {r.course_id} — hole {r.current_hole}
+              {(() => {
+                const t = primaryStrokeTotals(parseScorecardPlayers(r.scorecard_json ?? null));
+                return t ? ` — ${t.strokes} st / ${t.holesPlayed} holes` : "";
+              })()}
+            </span>
+            {" · "}
+            <Link href={`/rounds/${r.id}`} style={{ fontSize: 14 }}>
+              Chat & details
+            </Link>
+            {" · "}
+            <Link href={`/rounds/shot-history?round=${r.id}`} style={{ fontSize: 14 }}>
+              Shots
+            </Link>
             <button onClick={() => finishRound(r.id)} style={{ marginLeft: 10 }}>
               Finish
             </button>
@@ -121,6 +141,19 @@ export default function RoundsPage() {
         {finished.map((r) => (
           <li key={r.id} style={{ marginBottom: 8 }}>
             <Link href={`/rounds/${r.id}`}>Round #{r.id}</Link> — {r.course_id}
+            {(() => {
+              const t = primaryStrokeTotals(parseScorecardPlayers(r.scorecard_json ?? null));
+              return t ? (
+                <span style={{ opacity: 0.85 }}>
+                  {" "}
+                  — {t.strokes} st / {t.holesPlayed} holes
+                </span>
+              ) : null;
+            })()}
+            {" · "}
+            <Link href={`/rounds/shot-history?round=${r.id}`} style={{ fontSize: 14 }}>
+              Shots
+            </Link>
             <button onClick={() => deleteRound(r.id)} style={{ marginLeft: 8 }}>
               Delete
             </button>

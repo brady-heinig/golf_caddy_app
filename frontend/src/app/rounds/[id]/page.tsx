@@ -6,6 +6,7 @@ import { useEffect, useState } from "react";
 
 import { apiFetch } from "@/lib/api";
 import { HoleMap, type HoleData } from "@/components/HoleMap";
+import { parseScorecardPlayers, primaryVsPar, type ScorecardPlayerRow } from "@/lib/scorecardRound";
 
 type Round = {
   id: number;
@@ -15,6 +16,16 @@ type Round = {
   started_at: string;
   updated_at: string;
   notes?: string | null;
+  scorecard_json?: string | null;
+};
+
+type ShotRow = {
+  id: number;
+  hole: number;
+  club: string;
+  logged_at: string;
+  result: string | null;
+  distance_achieved: number | null;
 };
 
 export default function RoundDetailPage() {
@@ -34,6 +45,8 @@ export default function RoundDetailPage() {
   const [notes, setNotes] = useState<string>("");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [coursePars, setCoursePars] = useState<number[]>([]);
+  const [roundShots, setRoundShots] = useState<ShotRow[]>([]);
 
   async function load() {
     setError(null);
@@ -44,6 +57,22 @@ export default function RoundDetailPage() {
       setNotes(r.notes || "");
       await loadChat(r.current_hole);
       await loadHole(r.course_id, r.current_hole);
+      try {
+        const crs = (await apiFetch(`/api/course/${r.course_id}`)) as { holes?: { par?: number }[] };
+        const pars = (crs.holes ?? []).map((h) => {
+          const p = Number(h.par);
+          return Number.isFinite(p) && p > 0 ? p : 4;
+        });
+        setCoursePars(pars);
+      } catch {
+        setCoursePars([]);
+      }
+      try {
+        const shots = (await apiFetch(`/api/me/shots?round_id=${id}&limit=200`)) as ShotRow[];
+        setRoundShots(Array.isArray(shots) ? shots : []);
+      } catch {
+        setRoundShots([]);
+      }
       tryGpsOnce();
     } catch (e: any) {
       setError(e?.message || "Failed to load round");
@@ -140,6 +169,10 @@ export default function RoundDetailPage() {
     }
   }
 
+  const scorePlayers: ScorecardPlayerRow[] | null = round ? parseScorecardPlayers(round.scorecard_json ?? null) : null;
+  const vsPar =
+    scorePlayers && coursePars.length ? primaryVsPar(scorePlayers, coursePars) : null;
+
   if (!round) {
     return (
       <main style={{ margin: 0 }}>
@@ -158,6 +191,17 @@ export default function RoundDetailPage() {
       </h1>
       <p style={{ opacity: 0.8 }}>
         Status: <b>{round.status}</b> · Updated: {round.updated_at}
+        {vsPar != null ? (
+          <>
+            {" "}
+            · Score (vs par, holes scored): <b>{vsPar}</b>
+          </>
+        ) : null}
+      </p>
+      <p style={{ opacity: 0.85, marginTop: 4 }}>
+        <Link href={`/caddie?round=${round.id}`}>Open map / caddie</Link>
+        {" · "}
+        <Link href={`/rounds/shot-history?round=${round.id}`}>Shot history for this round</Link>
       </p>
 
       <section style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
@@ -195,6 +239,54 @@ export default function RoundDetailPage() {
       </section>
 
       {error ? <p style={{ color: "crimson" }}>{error}</p> : null}
+
+      <hr style={{ margin: "18px 0" }} />
+      <h2>Scorecard</h2>
+      {scorePlayers && scorePlayers.length > 0 ? (
+        <div style={{ overflowX: "auto", marginTop: 8 }}>
+          {scorePlayers.map((pl) => (
+            <div key={pl.id} style={{ marginBottom: 16 }}>
+              <div style={{ fontWeight: 700, marginBottom: 6 }}>{pl.name}</div>
+              <div style={{ display: "flex", gap: 4, fontSize: 12, flexWrap: "wrap" }}>
+                {pl.scores.map((sc, i) => (
+                  <div
+                    key={i}
+                    style={{
+                      width: 36,
+                      textAlign: "center",
+                      padding: "4px 2px",
+                      border: "1px solid rgba(11,18,32,0.12)",
+                      borderRadius: 4,
+                    }}
+                  >
+                    <div style={{ opacity: 0.6, fontSize: 10 }}>{i + 1}</div>
+                    <div>{typeof sc === "number" ? sc : "—"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p style={{ opacity: 0.8 }}>No scorecard saved for this round yet. Enter scores in the caddie app while this round is active.</p>
+      )}
+
+      <hr style={{ margin: "18px 0" }} />
+      <h2>Shots (this round)</h2>
+      {roundShots.length === 0 ? (
+        <p style={{ opacity: 0.8 }}>No shots logged for this round.</p>
+      ) : (
+        <ul style={{ paddingLeft: 18, marginTop: 8 }}>
+          {roundShots.map((s) => (
+            <li key={s.id} style={{ marginBottom: 6 }}>
+              Hole {s.hole} · {s.club}
+              {s.distance_achieved != null ? ` · ~${s.distance_achieved} yd` : ""}
+              {s.result ? ` · ${s.result}` : ""}
+              <span style={{ opacity: 0.65, fontSize: 12, marginLeft: 8 }}>{s.logged_at?.slice(0, 16)}</span>
+            </li>
+          ))}
+        </ul>
+      )}
 
       <hr style={{ margin: "18px 0" }} />
       <h2>Hole map</h2>

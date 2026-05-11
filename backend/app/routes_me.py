@@ -59,42 +59,59 @@ def list_shot_history(
     user: Annotated[dict, Depends(get_current_user)],
     conn: Annotated[psycopg.Connection, Depends(get_conn)],
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
+    round_id: Annotated[int | None, Query(ge=1)] = None,
 ) -> list[ShotHistoryItem]:
     """Logged shots for the current user (caddie feedback, round shots, newest first).
+
+    Optional ``round_id`` limits rows to that round (must belong to the current user).
 
     Requires migration `004_shot_feedback_postgres.sql` for optional columns; otherwise use base `shots` columns only.
     """
     uid = int(user["id"])
+    if round_id is not None:
+        ok = conn.execute(
+            "SELECT 1 FROM rounds WHERE id = %s AND user_id = %s",
+            (round_id, uid),
+        ).fetchone()
+        if not ok:
+            return []
+
+    where_extra = " AND round_id = %s" if round_id is not None else ""
+    base_args: list[Any] = [uid]
+    if round_id is not None:
+        base_args.append(round_id)
+    base_args.append(limit)
+
     try:
         rows = conn.execute(
-            """
+            f"""
             SELECT id, round_id, course_id, hole, shot_number, club,
                    distance_to_pin_before, distance_achieved, lie, shot_shape, result, notes, proximity_ft, logged_at,
                    recommended_club, advised_plays_like_yd, feedback_transcript
             FROM shots
-            WHERE user_id = %s
+            WHERE user_id = %s{where_extra}
             ORDER BY logged_at DESC
             LIMIT %s
             """,
-            (uid, limit),
+            tuple(base_args),
         ).fetchall()
     except Exception as e:
         err = str(e).lower()
         if "undefined_column" not in err and "does not exist" not in err:
             raise
         rows = conn.execute(
-            """
+            f"""
             SELECT id, round_id, course_id, hole, shot_number, club,
                    distance_to_pin_before, distance_achieved, lie, shot_shape, result, notes, proximity_ft, logged_at,
                    NULL::text AS recommended_club,
                    NULL::double precision AS advised_plays_like_yd,
                    NULL::text AS feedback_transcript
             FROM shots
-            WHERE user_id = %s
+            WHERE user_id = %s{where_extra}
             ORDER BY logged_at DESC
             LIMIT %s
             """,
-            (uid, limit),
+            tuple(base_args),
         ).fetchall()
     out: list[ShotHistoryItem] = []
     for r in rows:

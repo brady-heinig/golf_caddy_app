@@ -1,6 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import Link from "next/link";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 
 import { apiFetch } from "@/lib/api";
 
@@ -47,7 +49,16 @@ function formatWhen(iso: string): string {
   }
 }
 
-export default function ShotHistoryPage() {
+function roundIdFromSearchParams(sp: URLSearchParams): number | null {
+  const raw = sp.get("round");
+  const n = raw != null ? Number.parseInt(raw, 10) : NaN;
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function ShotHistoryInner() {
+  const searchParams = useSearchParams();
+  const filterRoundId = useMemo(() => roundIdFromSearchParams(searchParams), [searchParams]);
+
   const [rows, setRows] = useState<ShotHistoryRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -58,7 +69,11 @@ export default function ShotHistoryPage() {
       setError(null);
       setLoading(true);
       try {
-        const data = (await apiFetch("/api/me/shots?limit=300")) as ShotHistoryRow[];
+        const q =
+          filterRoundId != null
+            ? `/api/me/shots?limit=300&round_id=${filterRoundId}`
+            : "/api/me/shots?limit=300";
+        const data = (await apiFetch(q)) as ShotHistoryRow[];
         if (!cancelled) setRows(Array.isArray(data) ? data : []);
       } catch (e: unknown) {
         if (!cancelled) setError(e instanceof Error ? e.message : "Failed to load shots");
@@ -69,14 +84,29 @@ export default function ShotHistoryPage() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [filterRoundId]);
 
   return (
     <main style={{ margin: 0, background: "#ffffff", color: "#0b1220" }}>
       <h1 style={{ marginTop: 0 }}>Shot history</h1>
       <p style={{ opacity: 0.8, maxWidth: 720 }}>
-        Logged swings from rounds and voice check-ins after caddie advice (newest first).
+        Logged swings from rounds and voice check-ins after caddie advice (newest first). Shots from the map/caddie are tied
+        to the active server round; use{" "}
+        <Link href="/rounds" style={{ fontWeight: 700, color: "inherit" }}>
+          Past rounds
+        </Link>{" "}
+        to open a round or filter by <code>?round=</code> in the URL.
       </p>
+      {filterRoundId != null ? (
+        <p style={{ marginTop: 8 }}>
+          Showing shots for{" "}
+          <Link href={`/rounds/${filterRoundId}`} style={{ fontWeight: 700 }}>
+            round #{filterRoundId}
+          </Link>
+          {" · "}
+          <Link href="/rounds/shot-history">Clear filter</Link>
+        </p>
+      ) : null}
 
       {error ? (
         <p style={{ color: "crimson" }}>{error}</p>
@@ -92,7 +122,7 @@ export default function ShotHistoryPage() {
               borderCollapse: "collapse",
               width: "100%",
               fontSize: 13,
-              minWidth: 720,
+              minWidth: 800,
               background: "#fff",
               color: "#0b1220",
             }}
@@ -100,6 +130,7 @@ export default function ShotHistoryPage() {
             <thead>
               <tr style={{ borderBottom: "2px solid rgba(11,18,32,0.15)", textAlign: "left" }}>
                 <th style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>When</th>
+                <th style={{ padding: "10px 8px" }}>Round</th>
                 <th style={{ padding: "10px 8px" }}>Course</th>
                 <th style={{ padding: "10px 8px" }}>Hole</th>
                 <th style={{ padding: "10px 8px" }}>Club</th>
@@ -119,6 +150,13 @@ export default function ShotHistoryPage() {
                 return (
                   <tr key={r.id} style={{ borderBottom: "1px solid rgba(11,18,32,0.08)", verticalAlign: "top" }}>
                     <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>{formatWhen(r.logged_at)}</td>
+                    <td style={{ padding: "10px 8px", whiteSpace: "nowrap" }}>
+                      {r.round_id != null ? (
+                        <Link href={`/rounds/${r.round_id}`}>#{r.round_id}</Link>
+                      ) : (
+                        "—"
+                      )}
+                    </td>
                     <td style={{ padding: "10px 8px", wordBreak: "break-word" }}>{r.course_id}</td>
                     <td style={{ padding: "10px 8px" }}>{r.hole}</td>
                     <td style={{ padding: "10px 8px" }}>{r.club}</td>
@@ -148,5 +186,20 @@ export default function ShotHistoryPage() {
         </div>
       )}
     </main>
+  );
+}
+
+export default function ShotHistoryPage() {
+  return (
+    <Suspense
+      fallback={
+        <main style={{ margin: 0, background: "#ffffff", color: "#0b1220" }}>
+          <h1 style={{ marginTop: 0 }}>Shot history</h1>
+          <p style={{ opacity: 0.8 }}>Loading…</p>
+        </main>
+      }
+    >
+      <ShotHistoryInner />
+    </Suspense>
   );
 }
