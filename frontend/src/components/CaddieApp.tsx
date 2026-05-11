@@ -29,6 +29,27 @@ const MAP_FOLLOW_DURATION_MS = 480;
 type LL = { lat: number; lon: number };
 type RoundMode = "live" | "sim";
 
+const ROUND_MODE_PREF_KEY = "foreai.round_mode_pref";
+
+function readStoredRoundModePref(): RoundMode | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const v = localStorage.getItem(ROUND_MODE_PREF_KEY);
+    if (v === "live" || v === "sim") return v;
+  } catch {
+    /* ignore */
+  }
+  return null;
+}
+
+function writeStoredRoundModePref(mode: RoundMode): void {
+  try {
+    localStorage.setItem(ROUND_MODE_PREF_KEY, mode);
+  } catch {
+    /* ignore */
+  }
+}
+
 const SCORE_STRIP_MIN = 1;
 const SCORE_STRIP_MAX = 15;
 
@@ -458,8 +479,9 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
         const rm = (r.round_mode || "").toLowerCase();
         const fromApi = rm === "live" || rm === "sim" ? (rm as RoundMode) : null;
         const fromHint = resumeModeHint === "live" || resumeModeHint === "sim" ? resumeModeHint : null;
-        const pickMode = fromApi ?? fromHint;
-        if (pickMode) setRoundMode(pickMode);
+        const fromStorage = readStoredRoundModePref();
+        const pickMode: RoundMode = fromApi ?? fromHint ?? fromStorage ?? "live";
+        setRoundMode(pickMode);
       } catch (e) {
         if (!cancelled) {
           setResumeRoundErr(e instanceof Error ? e.message : "Could not load that round.");
@@ -473,6 +495,10 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
       cancelled = true;
     };
   }, [resumeRoundId, resumeHoleHint, resumeModeHint]);
+
+  useEffect(() => {
+    if (roundMode === "live" || roundMode === "sim") writeStoredRoundModePref(roundMode);
+  }, [roundMode]);
 
   useEffect(() => {
     if (!linkedRoundId || roundMode == null) return;
@@ -1882,14 +1908,23 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
     // eslint-disable-next-line react-hooks/exhaustive-deps -- liveGps omitted; see comment before return
   }, [hole, holeNum, roundMode, courseId]);
 
+  if (resumeRoundId != null && resumeRoundLoading) {
+    return (
+      <div className="phoneShell modePickerShell">
+        <div className="modePickerCard">
+          <h1 className="modePickerTitle">Play a round</h1>
+          <p className="modePickerSub">Loading your round…</p>
+        </div>
+      </div>
+    );
+  }
+
   if (roundMode == null) {
     return (
       <div className="phoneShell modePickerShell">
         <div className="modePickerCard">
           <h1 className="modePickerTitle">Play a round</h1>
-          {resumeRoundLoading ? (
-            <p className="modePickerSub">Loading your round…</p>
-          ) : linkedRoundId != null ? (
+          {linkedRoundId != null ? (
             <p className="modePickerSub">
               Continuing round #{linkedRoundId} on {courseId.replace(/_/g, " ")} — hole {holeNum}. Pick Live or Sim; hole and
               scorecard updates save to this round.
@@ -1904,7 +1939,7 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
             <button
               type="button"
               className="modePickerBtn modePickerBtnPrimary"
-              disabled={resumeRoundLoading || modeLinkBusy}
+              disabled={modeLinkBusy}
               onClick={() => void beginRoundMode("live")}
             >
               Live round
@@ -1912,7 +1947,7 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
             <button
               type="button"
               className="modePickerBtn"
-              disabled={resumeRoundLoading || modeLinkBusy}
+              disabled={modeLinkBusy}
               onClick={() => void beginRoundMode("sim")}
             >
               Simulated round
