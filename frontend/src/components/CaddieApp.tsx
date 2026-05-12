@@ -428,6 +428,13 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
   const [resumeRoundErr, setResumeRoundErr] = useState<string | null>(null);
   const [modeLinkBusy, setModeLinkBusy] = useState(false);
 
+  // Before first paint: if URL has `?round=`, show loading (not the mode picker) so Live/Sim cannot
+  // race the resume fetch or create a duplicate round. Same when client-navigating onto `?round=`.
+  useLayoutEffect(() => {
+    if (resumeRoundId != null) setResumeRoundLoading(true);
+    else setResumeRoundLoading(false);
+  }, [resumeRoundId]);
+
   const mapRef = useRef<Map | null>(null);
   const mapEl = useRef<HTMLDivElement | null>(null);
   const approachBendUserDraggedRef = useRef(false);
@@ -526,7 +533,8 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
 
   const beginRoundMode = useCallback(
     async (mode: RoundMode) => {
-      if (resumeRoundLoading || modeLinkBusy) return;
+      if (modeLinkBusy) return;
+      if (resumeRoundId != null && resumeRoundLoading) return;
       if (linkedRoundId == null) {
         setModeLinkBusy(true);
         setResumeRoundErr(null);
@@ -534,8 +542,12 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
           const r = (await apiFetch("/api/rounds", {
             method: "POST",
             body: JSON.stringify({ course_id: courseId }),
-          })) as { id: number };
-          setLinkedRoundId(r.id);
+          })) as { id?: unknown };
+          const id = Number(r?.id);
+          if (!Number.isFinite(id) || id <= 0) {
+            throw new Error("Server did not return a valid round id.");
+          }
+          setLinkedRoundId(id);
           setRoundMode(mode);
         } catch (e) {
           setResumeRoundErr(e instanceof Error ? e.message : "Could not link this session to a round.");
@@ -546,7 +558,7 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
         setRoundMode(mode);
       }
     },
-    [resumeRoundLoading, modeLinkBusy, linkedRoundId, courseId],
+    [resumeRoundId, resumeRoundLoading, modeLinkBusy, linkedRoundId, courseId],
   );
 
   useEffect(() => {
