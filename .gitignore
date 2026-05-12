@@ -1,6 +1,9 @@
 /BUILD_PLAN.md
 /stat6395_finalproject.pdf
 
+# Legacy prototype (not used by ForeAI frontend/backend)
+caddie/
+
 # Node / Next
 frontend/node_modules/
 frontend/.next/
