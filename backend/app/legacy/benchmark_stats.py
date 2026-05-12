@@ -18,6 +18,32 @@ _FAIRWAY_ANCHORS: list[tuple[int, float, float]] = [
 
 _LIE_DEEP = frozenset({"deep_rough", "rough"})
 
+# Very long approach: show GIR under 1% (model + tour display).
+_LONG_GIR_CAP = 0.99
+
+
+def _fairway_or_rough_for_long_cap(lie: str) -> bool:
+    low = lie.lower().replace(" ", "_")
+    if low == "tee":
+        return False
+    if low in ("fairway", "fringe", "light_rough", "rough", "deep_rough"):
+        return True
+    if "rough" in low:
+        return True
+    return False
+
+
+def _long_approach_gir_cap(
+    distance_yards: int, lie: str, gir_model: float, tour_gir: float
+) -> tuple[float, float]:
+    d = int(max(0, distance_yards))
+    low = lie.lower().replace(" ", "_")
+    if low == "tee" and d > 340:
+        return (min(float(gir_model), _LONG_GIR_CAP), min(float(tour_gir), _LONG_GIR_CAP))
+    if _fairway_or_rough_for_long_cap(lie) and d > 260:
+        return (min(float(gir_model), _LONG_GIR_CAP), min(float(tour_gir), _LONG_GIR_CAP))
+    return (float(gir_model), float(tour_gir))
+
 
 def _interp(x: float, xs: list[float], ys: list[float]) -> float:
     if x <= xs[0]:
@@ -65,9 +91,11 @@ def lie_gir_factor(lie: str) -> float:
 
 
 def expected_gir_model_percent(distance_yards: int, handicap_index: float, lie: str) -> tuple[float, float]:
-    tour_gir, tour_px = pga_tour_fairway_baseline(int(distance_yards))
+    dist = int(max(0, distance_yards))
+    tour_gir, tour_px = pga_tour_fairway_baseline(dist)
     g_adj, _ = handicap_adjust(tour_gir, tour_px, handicap_index)
     f = lie_gir_factor(lie)
     gir = max(2.0, min(98.5, g_adj * f))
-    return gir, tour_gir
+    gir_c, tour_c = _long_approach_gir_cap(dist, lie, gir, tour_gir)
+    return gir_c, tour_c
 

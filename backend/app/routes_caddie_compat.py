@@ -114,7 +114,8 @@ def get_hole(
         tee = hole["tee"]
         p_lat, p_lon = float(tee["lat"]), float(tee["lon"])
 
-    el_pin_m, el_from_m = elevation.get_elevations_m([(gc["lat"], gc["lon"]), (p_lat, p_lon)])
+    (elev_pair, elevation_ok) = elevation.get_elevations_m([(gc["lat"], gc["lon"]), (p_lat, p_lon)])
+    el_pin_m, el_from_m = elev_pair[0], elev_pair[1]
     el_change_ft = elevation.elevation_change_ft(el_pin_m, el_from_m)
     dist_yd = haversine_yards(p_lat, p_lon, gc["lat"], gc["lon"])
     elev_adj_yd = el_change_ft / 3.0
@@ -134,6 +135,8 @@ def get_hole(
         "elev_change_yd": round(elev_adj_yd, 1),
         "wind_adjust_yd": round(w_adj, 1),
         "wind_relation": w_rel,
+        "elevation_ok": elevation_ok,
+        "weather_ok": not bool(w.get("error")) and w.get("wind_mph") is not None and w.get("wind_dir_deg") is not None,
         # Header / UI: PGA tour baseline from distance only (no handicap/lie scaling).
         "green_hit_pct": round(float(tour_gir_pct), 2),
         "green_hit_pct_model": round(float(gir_model_pct), 2),
@@ -172,9 +175,10 @@ def get_plays_like_path(
 
     h1 = haversine_yards(player_lat, player_lon, bend_lat, bend_lon)
     h2 = haversine_yards(bend_lat, bend_lon, g_lat, g_lon)
-    el_p, el_b, el_g = elevation.get_elevations_m(
+    el_pts, _el_ok = elevation.get_elevations_m(
         [(player_lat, player_lon), (bend_lat, bend_lon), (g_lat, g_lon)]
     )
+    el_p, el_b, el_g = el_pts[0], el_pts[1], el_pts[2]
     leg1_ft = elevation.elevation_change_ft(el_b, el_p)
     leg2_ft = elevation.elevation_change_ft(el_g, el_b)
     base1 = elevation.plays_like_yards(h1, leg1_ft)

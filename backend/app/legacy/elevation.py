@@ -49,9 +49,10 @@ def get_elevation_m(lat: float, lon: float) -> float:
     return _get_elevation_m_cached(lat_r, lon_r, _ELEV_CACHE_REV)
 
 
-def get_elevations_m(coords: list[tuple[float, float]]) -> list[float]:
+def get_elevations_m(coords: list[tuple[float, float]]) -> tuple[list[float], bool]:
+    """Returns (elevations_m, ok). ok is False when Open-Meteo did not return a usable batch."""
     if not coords:
-        return []
+        return [], True
     lats: list[str] = []
     lons: list[str] = []
     for lat, lon in coords:
@@ -61,17 +62,17 @@ def get_elevations_m(coords: list[tuple[float, float]]) -> list[float]:
     url = f"{_OPEN_METEO_ELEVATION}?{urlencode({'latitude': ','.join(lats), 'longitude': ','.join(lons)})}"
     data = _open_meteo_get(url)
     if not data or data.get("error") is True:
-        return [0.0] * len(coords)
+        return [0.0] * len(coords), False
     elev = data.get("elevation")
     if not isinstance(elev, list) or len(elev) != len(coords):
-        return [0.0] * len(coords)
+        return [0.0] * len(coords), False
     out: list[float] = []
     for v in elev:
         try:
             out.append(float(v))
         except (TypeError, ValueError):
             out.append(0.0)
-    return out
+    return out, True
 
 
 def elevation_change_ft(elev_to_m: float, elev_from_m: float) -> float:

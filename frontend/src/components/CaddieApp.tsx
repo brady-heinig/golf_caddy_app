@@ -94,6 +94,12 @@ function windYardHeadTailYds(alongMph: number, baselineYds: number): { add: numb
   return { add: b * 0.01 * headMph, sub: b * 0.005 * tailMph };
 }
 
+function degreesToCardinal(deg: number): string {
+  const directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+  const idx = Math.round(deg / 22.5) % 16;
+  return directions[idx] ?? "";
+}
+
 function haversineYards(a: LL, b: LL): number {
   const R = 6371008.8; // meters
   const toRad = (d: number) => (d * Math.PI) / 180;
@@ -654,8 +660,11 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
     return () => ac.abort();
   }, [roundMode, courseId, holeNum, effectivePos?.lat, effectivePos?.lon]);
 
-  const metrics = hole?.metrics;
-  const effectiveMetrics = metricsOverride ?? metrics ?? null;
+  const effectiveMetrics = useMemo(() => {
+    const m = hole?.metrics;
+    if (m && metricsOverride) return { ...m, ...metricsOverride };
+    return metricsOverride ?? m ?? null;
+  }, [hole?.metrics, metricsOverride]);
   const dist = effectiveMetrics?.distance_yd ?? "—";
   const plays = effectiveMetrics?.plays_like_yd ?? "—";
   const elevToPinYd = effectiveMetrics?.elev_change_yd;
@@ -676,12 +685,20 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
 
     const backendWx = hole?.weather;
     const backendOk = Boolean(backendWx && !backendWx.error && backendWx.wind_mph != null && backendWx.wind_dir_deg != null);
-    const backendHasMetrics = Boolean(hole?.metrics && hole.metrics.distance_yd != null && hole.metrics.elev_change_yd != null);
+    const m = hole?.metrics;
+    const backendSubmetricsTrustworthy = Boolean(
+      m &&
+        m.distance_yd != null &&
+        m.elev_change_yd != null &&
+        m.elevation_ok !== false &&
+        m.weather_ok !== false
+    );
 
     let cancelled = false;
     const ac = new AbortController();
 
     async function fetchWxAndMaybeMetrics() {
+      let clientWx: Record<string, unknown> | null = null;
       try {
         // Weather fallback (Open‑Meteo forecast current)
         if (!backendOk) {
@@ -702,20 +719,22 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
           const cur = j?.current ?? {};
           const wd = cur?.wind_direction_10m;
           const ws = cur?.wind_speed_10m;
-          const wx = {
+          const wdeg = typeof wd === "number" ? wd : wd != null ? Number(wd) : null;
+          clientWx = {
             temp_f: cur?.temperature_2m ?? null,
             humidity_pct: cur?.relative_humidity_2m ?? null,
             wind_mph: typeof ws === "number" ? ws : ws != null ? Number(ws) : null,
-            wind_dir_deg: typeof wd === "number" ? wd : wd != null ? Number(wd) : null,
-            wind_dir_card: "",
+            wind_dir_deg: wdeg,
+            wind_dir_card: wdeg != null && Number.isFinite(wdeg) ? degreesToCardinal(wdeg) : "",
           };
-          if (!cancelled) setWxOverride(wx);
+          if (!cancelled) setWxOverride(clientWx);
         } else {
           if (!cancelled) setWxOverride(null);
         }
 
-        // Metrics fallback (elevation + wind adjustment) if backend metrics missing.
-        if (!backendHasMetrics) {
+        // Recompute elevation + wind plays-like in the browser when the server could not
+        // validate Open‑Meteo (common on hosts that block outbound HTTP).
+        if (!backendSubmetricsTrustworthy) {
           const q2 = new URLSearchParams({
             latitude: `${player.lat},${gc.lat}`,
             longitude: `${player.lon},${gc.lon}`,
@@ -733,7 +752,7 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
           const distYd = haversineYards(player, gc);
           const baseline = distYd + elevChangeYd;
 
-          const wx = (wxOverride ?? backendWx) as any;
+          const wx = (clientWx ?? backendWx) as Record<string, unknown> | null;
           let windAdj = 0;
           if (wx && !wx.error && wx.wind_mph != null && wx.wind_dir_deg != null) {
             const brg = bearingDegrees(player.lat, player.lon, gc.lat, gc.lon);
@@ -762,7 +781,15 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
       cancelled = true;
       ac.abort();
     };
-  }, [hole?.hole?.number, hole?.weather?.fetched_at, effectivePos?.lat, effectivePos?.lon, wxOverride]);
+  }, [
+    hole?.hole?.number,
+    hole?.weather?.fetched_at,
+    hole?.weather?.error,
+    hole?.metrics?.elevation_ok,
+    hole?.metrics?.weather_ok,
+    effectivePos?.lat,
+    effectivePos?.lon,
+  ]);
 
   const primaryScores = scorecardPlayers[0]?.scores ?? [];
   const scoreStr = useMemo(() => {
