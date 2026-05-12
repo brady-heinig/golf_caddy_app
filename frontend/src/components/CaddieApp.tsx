@@ -2411,15 +2411,15 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
               <div style={{ padding: "0 12px", fontSize: 13, color: "#b91c1c" }}>{voiceAskErr}</div>
             ) : null}
             <div style={{ flexShrink: 0, borderTop: "1px solid rgba(11,18,32,0.1)", padding: 12, display: "flex", flexDirection: "column", gap: 8 }}>
-              {!effectivePos ? (
-                <div className="metricSub" style={{ fontSize: 12 }}>
-                  Turn on location (live) or finish map load (sim) to use voice.
-                </div>
-              ) : null}
               <button
                 type="button"
                 className="btn btnPrimary"
                 disabled={voiceAskBusy || !effectivePos}
+                title={
+                  !effectivePos
+                    ? "Turn on location (live) or finish map load (sim) to use voice."
+                    : undefined
+                }
                 onClick={() => void runVoiceConversationTurn()}
               >
                 {voiceAskBusy ? "Listening…" : "Speak"}

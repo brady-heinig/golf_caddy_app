@@ -192,8 +192,8 @@ While the app offers helpful, real-time golf advice, there are a few limitations
 - **Green Contour:** Getting access to the contours of the greens would allow me to implement green reading assistance, but unfortunately this data is not available without paying a substantial fee. 
 - **More Robust Course List** The app currently only has Steven's Park Golf Course available, but I would like to expand the course list in the future.
 
-### Give it a Try!
-- **[Try ForeAI](https://your-caddie-app-link.example.com)**  
+### Try the App and Watch the Demo
+- **[Try ForeAI](https://golf-caddy-app-six.vercel.app/)**  
   Click the link to access and use the app yourself.
-- **[Watch the demo tutorial](./ForeAI%20Tutorial.mp4)**  
-  Open the MP4 in this folder for a full walkthrough of the app.
+- **[Watch a Demo](https://youtu.be/pkpECc7uTy4)**  
+  See a full walkthrough of all features in action.
