@@ -2379,12 +2379,6 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
               </button>
             </div>
             <div style={{ flex: 1, minHeight: 160, overflow: "auto", padding: "0 12px 8px" }}>
-              {voiceThread.length === 0 && !voiceAskBusy ? (
-                <p style={{ margin: "12px 0", fontSize: 14, opacity: 0.75, lineHeight: 1.45 }}>
-                  Tap “Speak turn” below. Each exchange is shown here; the caddie remembers earlier lines when you speak
-                  again.
-                </p>
-              ) : null}
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {voiceThread.map((m) => (
                   <div
@@ -2428,7 +2422,7 @@ export function CaddieApp({ resumeRoundId = null, resumeHoleHint = null, resumeM
                 disabled={voiceAskBusy || !effectivePos}
                 onClick={() => void runVoiceConversationTurn()}
               >
-                {voiceAskBusy ? "Listening…" : "Speak turn"}
+                {voiceAskBusy ? "Listening…" : "Speak"}
               </button>
               {ttsLoading ? (
                 <div className="metricSub" style={{ fontSize: 12 }} aria-live="polite">
